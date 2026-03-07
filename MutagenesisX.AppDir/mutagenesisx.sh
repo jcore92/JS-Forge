@@ -8,14 +8,14 @@ mutagenesisx-shell () {
 
     # APPLICATION INFORMATION
 
-    app_name="MutagenesisX"
+    app_name="JS-Forge"
     file_name="mutagenesisx.sh"
 
     app_ver_major="1"
     app_ver_minor="0"
     app_ver_build="0"
+    probe_name="System Compatibility"
     app_ver_stage="beta"
-    probe_name="xProbe"
 
     gui_flag="0"
     tui_flag="0"
