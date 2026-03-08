@@ -1,5 +1,7 @@
 #!/bin/bash
 
+mkdir $app_temp_loc 2>/dev/null
+
 tool_to_pkg_name() {
 case "$1" in
 "nextcloud") echo "nextcloud-desktop" ;;
