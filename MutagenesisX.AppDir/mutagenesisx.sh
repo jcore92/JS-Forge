@@ -380,7 +380,7 @@ https://github.com/jcore92" | center
     echo "Infused with MutagenesisX, GhostAPT, and Command Center's DNA.
 (Various older predecessor's of MutagenesisX.)
 
-jcore92 - Lead Programmer/MutagenesisX Author" | center
+jcore92 - Lead Programmer" | center
 
     sleep 3
 
