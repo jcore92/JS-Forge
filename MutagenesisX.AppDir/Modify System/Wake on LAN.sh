@@ -93,7 +93,8 @@ fi
 
 check_programs
 
-interface=$(ip -br link | awk '/^en/ {print $1; exit}')
+#interface=$(ip -br link | awk '/^en/ {print $1; exit}')
+interface=$(ip -br link | awk '/^(en|eth)/ {print $1; exit}')
 service_file_temp="$app_temp_loc/wol.service"
 service_file="/etc/systemd/system/wol.service"
 mac=$(cat /sys/class/net/$interface/address)
