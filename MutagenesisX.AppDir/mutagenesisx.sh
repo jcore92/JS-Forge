@@ -352,7 +352,7 @@ https://github.com/jcore92
 
 Infused with MutagenesisX, GhostAPT, and Command Center's DNA. (Various older predecessor's of MutagenesisX.)
 
-jcore92 - Lead Programmer/MutagenesisX Author" | zenity --text-info --title="About $app_name" $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label="" &
+jcore92 - Lead Programmer" | zenity --text-info --title="About $app_name" $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label="" &
 
     fi
 
