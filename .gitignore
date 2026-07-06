@@ -1,3 +1,2 @@
 # Ignore folders
-build/
-#.gitignore
+Builds/
