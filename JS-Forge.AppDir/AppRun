@@ -1,0 +1,1453 @@
+#!/bin/bash
+
+# =============================================================================
+# System
+# =============================================================================
+
+variables() {
+
+	# =============================================================================
+	# APPLICATION INFORMATION
+	# =============================================================================
+
+	app_name="JS-Forge"
+	file_name="AppRun"
+	command_name="jsforge"
+	dev_team="JCore Studios & jcore92"
+
+	app_ver_major="1"
+	app_ver_minor="0"
+	app_ver_build="0"
+	app_ver_stage="beta"
+	probe_name="System"
+
+	allow_user_extensions="0"
+	exit_override="0"
+
+	# =============================================================================
+	# GUI/TUI Picker
+	# =============================================================================
+
+	# Sets initial values
+	gui_flag="0"
+	tui_flag="0"
+
+	# GUI/TUI Switcher
+	if [ -t 0 ]; then
+		# TERMINAL
+		tui_flag="1"
+
+	else
+		# GUI
+		gui_flag="1"
+
+	fi
+
+	# =============================================================================
+	# Generate Extension Menu
+	# =============================================================================
+
+	declare -ga ext_menu_order
+	declare -gA ext_menu_labels
+	declare -gA ext_menu_actions
+
+	# =============================================================================
+	# LOCATIONS
+	# =============================================================================
+
+	app_temp_loc="/tmp/$app_name"
+	#app_install_loc="$HOME/.local/bin"
+	app_script_folder_loc="$HOME/.$app_name"
+	eula_acceptance_file="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/.eula_accepted_version"
+
+	resolve_extension_dirs() {
+		local script_dir
+		local user_ext
+		local portable_ext
+		local appimage_ext
+
+		script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+		user_ext="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/Extensions"
+		portable_ext="$script_dir"
+		appimage_ext=""
+
+		extension_dirs=()
+
+		if [ -n "$APPDIR" ]; then
+			appimage_ext="$APPDIR/usr/share/$app_name/Extensions"
+			[ -d "$appimage_ext" ] && extension_dirs+=("$appimage_ext")
+		fi
+
+		[ -d "$portable_ext" ] && extension_dirs+=("$portable_ext")
+
+		if [ "$allow_user_extensions" = "1" ]; then
+			mkdir -p "$user_ext"
+			extension_dirs+=("$user_ext")
+		fi
+	}
+
+	# =============================================================================
+	# SYSTEM INFORMATION
+	# =============================================================================
+
+	current_user="$whoami"
+
+	# Determine if user is root, then adds blank or sudo to syntax.
+	if ((EUID == 0)); then
+		# Running as root: no sudo needed
+		sudocmd=""
+	elif command -v sudo >/dev/null 2>&1; then
+		# Not root, sudo is installed: use sudo
+		sudocmd="sudo "
+	else
+		# Not root, and sudo NOT installed: leave blank
+		sudocmd=""
+	fi
+
+	package_manager="$(for cmd in apt dnf yum pacman zypper; do
+		command -v $cmd &>/dev/null && echo $cmd && break
+	done)"
+
+	if [ "$package_manager" == "apt" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager update"
+	fi
+
+	if [ "$package_manager" == "dnf" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager makecache"
+	fi
+
+	if [ "$package_manager" == "yum" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager check-update"
+	fi
+
+	if [ "$package_manager" == "pacman" ]; then
+		pkgmngr_install="$sudocmd$package_manager -Syu --noconfirm"
+		pkgmngr_refresh="sleep .1"
+	fi
+
+	if [ "$package_manager" == "zypper" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager refresh"
+	fi
+
+	detect_display_server() {
+		if [ -n "$WAYLAND_DISPLAY" ] && [ -n "$DISPLAY" ]; then
+			echo "XWayland / Wayland"
+		elif [ -n "$WAYLAND_DISPLAY" ] || [ "$XDG_SESSION_TYPE" = "wayland" ]; then
+			echo "Wayland"
+		elif [ -n "$DISPLAY" ] || [ "$XDG_SESSION_TYPE" = "x11" ]; then
+			if command -v Xorg >/dev/null 2>&1; then
+				if Xorg -version 2>&1 | grep -iq "XLibre"; then
+					echo "XLibre"
+					return
+				fi
+			fi
+			echo "X11"
+		else
+			echo "None"
+		fi
+	}
+
+	detect_desktop_environment() {
+		local current_desktop=""
+		local wm_id=""
+		local wm_name=""
+
+		current_desktop="$XDG_CURRENT_DESKTOP"
+
+		if [ -z "$current_desktop" ]; then
+			[ -n "$XDG_SESSION_DESKTOP" ] && current_desktop="$XDG_SESSION_DESKTOP"
+		fi
+
+		if [ -z "$current_desktop" ]; then
+			[ -n "$GDMSESSION" ] && current_desktop="$GDMSESSION"
+		fi
+
+		if [ -z "$current_desktop" ]; then
+			[ -n "$DESKTOP_SESSION" ] && current_desktop="$DESKTOP_SESSION"
+		fi
+
+		if [ -z "$current_desktop" ] || [ "$current_desktop" = "default" ]; then
+			if pgrep -x "icewm" >/dev/null 2>&1 || pgrep -f "icewm-session" >/dev/null 2>&1; then
+				current_desktop="IceWM"
+			elif pgrep -x "fluxbox" >/dev/null 2>&1; then
+				current_desktop="Fluxbox"
+			elif pgrep -x "openbox" >/dev/null 2>&1; then
+				current_desktop="Openbox"
+			elif pgrep -x "xfwm4" >/dev/null 2>&1 || pgrep -f "xfce4-session" >/dev/null 2>&1; then
+				current_desktop="XFCE"
+			elif pgrep -x "jwm" >/dev/null 2>&1; then
+				current_desktop="JWM"
+			fi
+		fi
+
+		if [ -z "$current_desktop" ] && [ -n "$DISPLAY" ] && command -v xprop >/dev/null 2>&1; then
+			wm_id="$(xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | awk '{print $NF}')"
+			if [ -n "$wm_id" ] && [ "$wm_id" != "window" ]; then
+				wm_name="$(xprop -id "$wm_id" _NET_WM_NAME 2>/dev/null | cut -d'"' -f2)"
+				[ -n "$wm_name" ] && current_desktop="$wm_name"
+			fi
+		fi
+
+		if [ -z "$current_desktop" ]; then
+			if [ -n "$SSH_CONNECTION" ] || [ -n "$SSH_TTY" ]; then
+				current_desktop="None (SSH Session)"
+			else
+				current_desktop="Unknown / Headless"
+			fi
+		fi
+
+		echo "$current_desktop"
+	}
+
+	#local detected_display_server
+	#local detected_desktop_environment
+
+	detected_display_server="$(detect_display_server)"
+	detected_desktop_environment="$(detect_desktop_environment)"
+
+	# =============================================================================
+	# DEFAULT GUI WINDOW SIZES & OVERRIDES BASED ON DE:
+	# =============================================================================
+
+	default_eula_gui_dimensions="--width=550 --height=550"
+	default_mainmenu_gui_dimensions="--width=450 --height=550"
+	default_loading_gui_dimensions="--width=300 --height=200"
+	default_messagebox_gui_dimensions="--width=350"
+
+	if [ "$XDG_CURRENT_DESKTOP" == "XFCE" ]; then
+
+		default_eula_gui_dimensions="--width=450 --height=500"
+		default_mainmenu_gui_dimensions="--width=400 --height=500"
+		default_loading_gui_dimensions="--width=300 --height=200"
+		default_messagebox_gui_dimensions="--width=350"
+
+	fi
+
+	if [ "$XDG_CURRENT_DESKTOP" == "COSMIC" ]; then
+
+		default_eula_gui_dimensions="--width=550 --height=600"
+		default_mainmenu_gui_dimensions="--width=450 --height=600"
+		default_loading_gui_dimensions="--width=300 --height=200"
+		default_messagebox_gui_dimensions="--width=350"
+
+	fi
+
+	if [ "$XDG_CURRENT_DESKTOP" == "KDE" ]; then
+
+		default_eula_gui_dimensions="--width=500 --height=500"
+		default_mainmenu_gui_dimensions="--width=400 --height=500"
+		default_loading_gui_dimensions="--width=300 --height=200"
+		default_messagebox_gui_dimensions="--width=350"
+
+	fi
+
+	if [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]]; then
+
+		default_eula_gui_dimensions="--width=500 --height=500"
+		default_mainmenu_gui_dimensions="--width=400 --height=500"
+		default_loading_gui_dimensions="--width=300 --height=200"
+		default_messagebox_gui_dimensions="--width=350"
+
+	fi
+
+}
+
+# =============================================================================
+# Terminal Interface
+# =============================================================================
+
+center() {
+	local width
+	width="${COLUMNS:-$(tput cols)}"
+	while IFS= read -r line; do
+		# Strip color codes to get the actual text length
+		local stripped_line=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
+		local actual_length=${#stripped_line}
+
+		if ((actual_length == width)); then
+			printf '%s\n' "$line"
+			continue
+		fi
+
+		if ((actual_length > width)); then
+			while read -r subline; do
+				local stripped_subline=$(echo "$subline" | sed 's/\x1b\[[0-9;]*m//g')
+				local subline_length=${#stripped_subline}
+
+				if ((subline_length == width)); then
+					printf '%s\n' "$subline"
+					continue
+				fi
+				printf '%*s\n' $(((subline_length + width) / 2)) "$subline"
+			done < <(fold -w "$width" <<<"$line")
+			continue
+		fi
+
+		printf '%*s\n' $(((actual_length + width) / 2)) "$line"
+	done <"${1:-/dev/stdin}"
+}
+
+print_red() {
+	while IFS= read -r line; do
+		# Calculate the length of the original line
+		local original_length=${#line}
+		# Print the line in red, ensuring the length is preserved
+		printf "\033[31m%s\033[0m\n" "$line"
+	done
+}
+
+divider() {
+	echo ""
+	printf -- ".%.0s" $(seq $(tput cols))
+	echo ""
+}
+
+cursor_menu() {
+	local prompt="$1" outvar="$2" options=("${@:3}")
+	local cur=0 count=${#options[@]}
+	local esc=$(echo -en "\e")
+
+	printf "$prompt\n"
+	while true; do
+		local index=0
+		for o in "${options[@]}"; do
+			if [ $index -eq $cur ]; then
+				echo -e " >\e[7m$o\e[0m"
+			else
+				echo "  $o"
+			fi
+			((index++))
+		done
+
+		read -s -n3 key
+		case "$key" in
+		"$esc[A")
+			((cur--))
+			((cur < 0)) && cur=0
+			;;
+		"$esc[B")
+			((cur++))
+			((cur >= count)) && cur=$((count - 1))
+			;;
+		"") break ;;
+		esac
+		echo -en "\e[${count}A"
+	done
+
+	printf -v "$outvar" "${options[$cur]}"
+}
+
+text_delay() {
+
+	sleep .1
+
+}
+
+jcorestudios_banner() {
+	# The multi-line image
+	logotitle=(
+		""
+		""
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⢿⣿⣿⣿⠏⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡟⠀⣿⣿⡟⣠⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣯⠀⠀⠀⠀⠄⠉⠉⠉⠛⠻⢿⠋⣿⣿⣿⣿⣿⣿⢃⠀⣿⡿⢱⣿⣸⣿⣿⣿⣿⣿⡏⣿⣿⠛⡿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣧⡀⠀⠂⣾⣿⣿⣿⣶⣶⡆⣠⢸⣻⠿⠿⣿⡟⢸⠀⣿⢃⣾⣿⡏⣿⣿⣿⣿⣿⠀⢻⡏⡄⢡⡜⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⠶⡄⠘⢿⣿⣿⣿⣿⢃⣿⢸⣿⡟⢳⣶⢁⣟⠀⢇⣾⣿⣿⡇⢻⣿⣿⠀⡟⢀⢸⢱⣧⣾⣿⡘⢛⣛⣛⣛⣛⣛⣻⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣶⣶⣶⣦⣐⢶⣶⣶⣾⣿⡏⡟⢸⡄⠇⣼⣿⠀⣰⣽⣿⡻⢷⢸⣿⡇⣤⠀⣿⠀⣾⣿⣿⣿⣿⣷⣽⡻⢿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣿⣿⣿⡇⢠⣿⣿⣴⣿⣿⣷⣿⣿⣿⣿⣷⡄⣟⢀⢿⣾⣿⣾⣿⣿⣿⣿⣿⣿⣿⣿⣦⠙⠻⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠃⣼⣿⣶⣭⣙⡛⠿⠿⢿⣿⣿⣿⣿⣿⣷⠀⠈⠻⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⢠⣿⣿⣿⣿⣿⣿⣷⣶⣤⣄⣈⡉⠉⠉⠀⠀⠀⠀⠈⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣶⣶⣤⣴⣾⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		"⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿"
+		""
+	)
+
+	# Get the terminal width
+	term_width=$(tput cols)
+
+	# Function to center a line
+	center_line() {
+		local line="$1"
+		local line_length=${#line}
+		local padding=$(((term_width - line_length) / 2))
+		printf "%${padding}s%s%${padding}s\n" "" "$line" ""
+	}
+
+	# Center each line of the image
+	for line in "${logotitle[@]}"; do
+		center_line "$line"
+	done
+
+}
+
+jcore92_banner() {
+	# The multi-line image
+	logotitle=(
+		""
+		""
+		""
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣔⣀⣄⣶⠟⢲⣶⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠴⣶⣶⣶⣶⡀⢀⠆⠰⡏⣿⠟⢀⣶⡿⢁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣤⣤⣼⣿⣿⣿⣿⢻⠃⠈⣾⣷⣤⡃⠀⣘⣩⣴⠸⡆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⣿⣿⣿⣿⣿⣿⣿⣏⡄⢠⠘⠻⠿⣿⣿⣿⣿⣿⣿⣇⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢹⣿⣿⡿⢿⣿⡿⡿⠷⠀⣄⡀⠀⠀⣿⠁⠀⠀⠈⢡⠖⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠉⠙⠛⠛⠀⣄⡀⠀⠘⣲⠶⠿⣿⣷⣴⣤⠄⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠀⣠⡆⣶⡟⣠⡄⠀⠻⣧⣄⣐⣨⢭⠖⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠰⢶⡘⠄⢿⣇⠸⠆⠻⠅⣤⠀⣘⠲⠶⠋⠀⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⣮⢳⡄⠛⠋⠁⢰⡇⢀⡁⢠⢿⣿⠇⠀⣐⠈⡉⢠⠠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⡾⠿⠋⠋⠀⠀⠀⠀⠀⠀⢀⣿⡯⢸⠟⠁⠘⠂⠘⠈⠃⡘⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⣾⣿⠟⢦⣀⠀⢀⠄⠒⠀⠀⠀⠈⠉⠀⠀⠀⠀⠀⣠⣄⢲⡀⢳⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⡇⠀⠶⠶⠟⡀⢠⠀⠀⠀⠀⠀⠀⠀⠀⠀⢐⣴⠀⠹⣜⣦⠛⡛⣶⣤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠈⠛⠛⠋⠉⠀⠈⡀⠀⠀⠀⠆⣰⡆⣤⢰⣶⣅⣘⡗⠀⠁⠈⠻⢟⣛⠔⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠠⠀⠀⠀⠀⠀⠀⠀⠑⠂⢀⠀⣬⢇⡉⡘⠻⠆⣿⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠀⠀⠀⠀⠀⠀⠀⢀⡀⣸⠟⢼⢧⣿⣧⢠⣄⢠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⠃⣿⡇⡆⣼⣿⠟⣞⡋⢀⠰⠶⠶⠶⠶⠶⠶⠶⠦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+		""
+	)
+
+	# Get the terminal width
+	term_width=$(tput cols)
+
+	# Function to center a line
+	center_line() {
+		local line="$1"
+		local line_length=${#line}
+		local padding=$(((term_width - line_length) / 2))
+		printf "%${padding}s%s%${padding}s\n" "" "$line" ""
+	}
+
+	# Center each line of the image
+	for line in "${logotitle[@]}"; do
+		center_line "$line"
+	done
+
+}
+
+jsforge_banner() {
+	# The multi-line image
+	logotitle=(
+		""
+        "⠀⠀⠀⠀⠀⠀⢀⠀⠀⠀⠀⠀⢄⠀⠀⠀            "
+        "⠀⠀⠀⠀⠀⠀⢿⣿⡦⡀⠀⠀⠠⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠙⢽⣯⣄⠀⠀⢁⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢽⢷⣄⠀⠪⡠⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠑⢝⢷⣌⠀⠂⣂⠀⠀⠀⠀⠀⠀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿⣿⣍⣳⡄⠀⠀⠀⠀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣿⣿⣿⣻⢃⠠⠀⣀⣀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠐⢨⠁⠒⢬⣿⣿⣷⣿⡵⠒⠁⠐⠤⢀⡀"
+        "⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣔⡲⢧⠻⠞⣣⣏⡁⢘⣍⠭⣭⣳⣶⣿⠃"
+        "⠀⠀⠀⢀⣀⠀⢀⣤⠴⢭⣉⣻⣷⣢⣾⣷⣽⣿⣿⣾⣿⣿⣿⡟⠁⠀"
+        "⠀⠀⠻⣿⣶⢶⢾⣯⣭⣥⣖⣢⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠋⠀⠀⠀"
+        "⠀⠀⠀⠈⠻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⠁⠀⠀⠀⠀"
+        "⠀⠀⠀⠀⠀⠀⠀⠉⣉⣻⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣀⠀⠀⠀⠀⠀"
+        "⠀⠀⠀⠺⡞⠁⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⣿⣿⣿⣿⣦⠀⠀⠀"
+        "⢠⠁⠀⠘⠛⠂⠸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠟⢡⠀⠀"
+        "⠀⠠⠀⠀⠀⠀⠀⠈⠻⣿⣿⣽⣿⡿⠛⠉⠁⠀⠀⠀⠀⠀⠠⠀⠀⠀"
+        "⠀⠀⠀⠈⠀⠐⠀⠤⠀⠈⠙⠛⠉⠁⠀⠀⠀⠀⠐⠀⠈⠀⠀⠀⠀⠀"
+        ""
+	)
+
+	# Get the terminal width
+	term_width=$(tput cols)
+
+	# Function to center a line
+	center_line() {
+		local line="$1"
+		local line_length=${#line}
+		local padding=$(((term_width - line_length) / 2))
+		printf "%${padding}s%s%${padding}s\n" "" "$line" ""
+	}
+
+	# Center each line of the image
+	for line in "${logotitle[@]}"; do
+		center_line "$line"
+	done
+
+	sleep .2
+
+}
+
+entertocontinue() {
+
+	entertocontinue=(
+		""
+		"Press enter to continue"
+	)
+
+	# Get the terminal width
+	term_width=$(tput cols)
+
+	# Function to center a line
+	center_line() {
+		local line="$1"
+		local line_length=${#line}
+		local padding=$(((term_width - line_length) / 2))
+		printf "%${padding}s%s%${padding}s\n" "" "$line" ""
+	}
+
+	# Center each line of the image
+	for line in "${entertocontinue[@]}"; do
+		center_line "$line"
+	done
+
+	read -p ""
+
+}
+
+endprog() {
+
+	exit
+
+}
+
+# =============================================================================
+# Scenes
+# =============================================================================
+
+credits() {
+	#region
+
+	creds1="$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage
+MIT License - Feel free to fork this"
+
+	creds2="Presented By:
+https://jcorestudios.com/
+https://github.com/jcore92"
+
+	creds3="Description:
+A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, lightweight environment probing, and extension loading, infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA."
+
+	creds4="Credits & Acknowledgements
+========================================
+jcore92 - Lead Programmer/Founder
+Perplexity - AI Code Advisor/Programmer
+Gemini - AI Code Monkey #2
+Leo - AI Code Monkey #1"
+
+	if [ "$gui_flag" = "1" ]; then
+
+		if [ "$exit_override" = "0" ]; then
+			echo "$creds1
+
+$creds2
+
+$creds3
+
+$creds4" | zenity --text-info --title="About $app_name" $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label="" &
+		fi
+
+		if [ "$exit_override" = "1" ]; then
+			echo "$creds1
+
+$creds2
+
+$creds3
+
+$creds4" | zenity --text-info --timeout="3" --title="About $app_name" $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label="" &
+		fi
+
+	fi
+
+	if [ "$tui_flag" = "1" ]; then
+
+		clear
+
+		jcorestudios_banner
+
+		echo "$creds2" | center
+
+		sleep 3
+
+		clear
+
+		jcore92_banner
+
+		echo "$creds1
+" | center
+
+		echo "$creds3
+
+$creds4" | center
+
+		if [ "$exit_override" = "0" ]; then
+			entertocontinue
+		fi
+
+		if [ "$exit_override" = "1" ]; then
+			sleep 3
+		fi
+
+		clear
+
+	fi
+	#endregion
+}
+
+eula_current_version() {
+	echo "${app_ver_major}.${app_ver_minor}.${app_ver_build}-${app_ver_stage}"
+}
+
+eula_is_required() {
+	local current_version
+	local saved_version
+
+	current_version="$(eula_current_version)"
+
+	if [ ! -f "$eula_acceptance_file" ]; then
+		return 0
+	fi
+
+	saved_version="$(head -n 1 "$eula_acceptance_file" 2>/dev/null)"
+
+	if [ "$saved_version" != "$current_version" ]; then
+		return 0
+	fi
+
+	return 1
+}
+
+eula_mark_accepted() {
+	mkdir -p "$(dirname "$eula_acceptance_file")"
+	printf '%s\n' "$(eula_current_version)" >"$eula_acceptance_file"
+}
+
+eula_prompt() {
+
+	#region
+
+	eula_text="MIT License
+
+Copyright (c) 2026 $dev_team
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the \"Software\"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."
+
+	#endregion
+
+	eula_is_required || return 0
+
+	if [ "$tui_flag" = "1" ]; then
+
+		if echo "$eula_text" | less; then
+			eula_mark_accepted
+			text_delay
+			clear
+		else
+			exit 1
+		fi
+
+	fi
+
+	if [ "$gui_flag" = "1" ]; then
+
+		if printf '%s\n' "$eula_text" | zenity --text-info --title="$app_name: MIT License" $default_eula_gui_dimensions --ok-label="I Agree"; then
+			eula_mark_accepted
+			text_delay
+		else
+			exit 1
+		fi
+
+	fi
+}
+
+xprobe() {
+
+	#region
+	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+
+	echo "$probe_name Report" | center
+
+	divider
+
+	echo ""
+
+	# Initialize array
+	xprob_messages=()
+
+	text_delay
+	echo "Checking environment..."
+
+	if [ -z "$SSH_CONNECTION" ] && [ -z "$SSH_TTY" ] && [ -t 0 ] && [[ "$(tty 2>/dev/null)" == /dev/tty* ]]; then
+
+		text_delay
+		echo " ✕ TTY is not supported. Please use a Desktop Environment to open $app_name." | if [ "$gui_flag" = "1" ]; then
+			zenity --text-info $default_mainmenu_gui_dimensions
+		else
+			cat | print_red
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			divider
+			entertocontinue
+		fi
+		exit
+	fi
+
+	if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$IS_WSL" ]; then
+
+		text_delay
+		echo " ✕ WSL is not supported." | if [ "$gui_flag" = "1" ]; then
+			zenity --text-info $default_mainmenu_gui_dimensions
+		else
+			cat | print_red
+			#entertocontinue
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			divider
+			entertocontinue
+		fi
+		exit
+	fi
+
+	#text_delay ; echo "Checking package manager..."
+
+	if [ "$package_manager" != "apt" ] && [ "$package_manager" != "zypper" ] && [ "$package_manager" != "dnf" ] && [ "$package_manager" != "pacman" ] && [ "$package_manager" != "yum" ]; then
+
+		text_delay
+		echo " ✕ Unsupported package manager '$package_manager'.
+
+Program cannot continue, exiting." | if [ "$gui_flag" = "1" ]; then
+			zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
+			#exit
+		else
+			cat | print_red
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			divider
+			entertocontinue
+		fi
+
+		exit
+
+	fi
+
+	# Get system's pretty name to display
+	prettyname="$(cat /etc/os-release | grep "PRETTY_NAME" | awk -F '"' '{print $2}')"
+
+	# Check the /etc/os-release file for any trace of Ubuntu or Debian: ubuntu debian
+	if grep -qi "ubuntu" /etc/os-release; then
+
+		xprob_messages+=("$prettyname")
+		xprob_messages+=(" ✓ package manager: $package_manager")
+		xprob_messages+=(" ✓ package manager bridge: disabled")
+		xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
+
+		text_delay
+		echo "$prettyname" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		text_delay
+		echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			echo " ✓ package manager bridge: disabled"
+		#divider
+		#entertocontinue
+		fi
+
+		text_delay
+		echo " ✓ desktop environment: $detected_desktop_environment" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+	elif grep -qi "debian" /etc/os-release; then
+
+		xprob_messages+=("$prettyname")
+		xprob_messages+=(" ✓ package manager: $package_manager")
+		xprob_messages+=(" ✓ package manager bridge: disabled")
+		xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
+
+		text_delay
+		echo "$prettyname" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		text_delay
+		echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			echo " ✓ package manager bridge: disabled"
+		#divider
+		#entertocontinue
+		fi
+
+		text_delay
+		echo " ✓ desktop environment: $detected_desktop_environment" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+	else
+
+		if [ "$gui_flag" = "1" ]; then
+			echo "# generating results..." >&3
+			sleep 1
+			echo "# displaying report..." >&3
+		fi
+
+		xprob_messages+=("$prettyname")
+		xprob_messages+=(" ✓ package manager: $package_manager")
+		xprob_messages+=(" ✓ package manager bridge: enabled")
+		xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
+
+		text_delay
+		echo "$prettyname" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		text_delay
+		echo " ✕ apt package manager NOT installed
+Enabling the package manager bridge compatibility layer...
+(package manager bridge support: zypper, pacman, dnf, yum.)
+
+" | if [ "$gui_flag" = "1" ]; then
+			zenity --progress --pulsate --timeout=2 --text="Enabling package manager bridge for non-apt distros..." --title="$app_name: package manager bridge" $default_loading_gui_dimensions --no-cancel &
+		else
+			cat | print_red
+		fi
+
+		text_delay
+		echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			echo " ✓ package manager bridge: enabled"
+		#divider
+		#entertocontinue
+		fi
+
+		text_delay
+		echo " ✓ desktop environment: $detected_desktop_environment" | if [ "$tui_flag" = "1" ]; then
+			cat
+		fi
+
+		sleep .5
+		#exit
+	fi
+
+	# Wayland
+
+	xprob_messages+=(" ✓ display server: $detected_display_server")
+
+	text_delay
+	echo " ✓ display server: $detected_display_server" | if [ "$tui_flag" = "1" ]; then
+		cat
+	fi
+
+	# Systemd
+
+	#text_delay ; echo "Checking installed packages..."
+	# Optimal for Alpine Linux, but mainstream Linux should already have these installed:
+
+	tool_to_pkg_name() {
+		case "$1" in
+		"7z") echo "7zip" ;;
+		#"7z")  echo "p7zip-full" ;;
+		"dig") echo "dnsutils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "shadow" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+	}
+
+	#
+
+	check_programs() {
+		declare -g missing=()
+		local programs=("flatpak" "zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open") # Add more here
+
+		for prog in "${programs[@]}"; do
+			if ! command -v "$prog" &>/dev/null; then
+
+				xprob_messages+=(" ✕ $prog is not installed")
+
+				text_delay
+				echo -e " ✕ $prog is not installed" | print_red | if [ "$tui_flag" = "1" ]; then
+					cat
+				fi
+
+				missing+=("$(tool_to_pkg_name "$prog")")
+				#missing+=("$prog")
+
+			else
+
+				xprob_messages+=(" ✓ $prog is installed")
+
+				text_delay
+				echo -e " ✓ $prog is installed" | if [ "$tui_flag" = "1" ]; then
+					cat
+				fi
+
+			fi
+		done
+
+		if [ "$gui_flag" = "1" ]; then
+			echo "# generating results..." >&3
+		fi
+
+		if [ ${#missing[@]} -ne 0 ]; then
+
+			if [ "$gui_flag" = "1" ]; then
+				echo "# attempting install..." >&3
+			fi
+
+			text_delay
+			echo "
+Attempting to install package(s):
+'${missing[*]}'
+" | if [ "$gui_flag" = "1" ]; then
+				zenity --text-info --timeout=4 $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Notification" --ok-label="" --cancel-label=""
+
+				if [ "$package_manager" == "apt" ]; then
+					x-terminal-emulator -e bash -c "printf ' 🔐 ' ; $pkgmngr_refresh ; $pkgmngr_install ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
+				else
+					# List of terminal emulators with their -e syntax
+					terminals=(
+						"xfce4-terminal -x"   # XFCE
+						"konsole --execute"   # KDE
+						"mate-terminal -x"    # MATE
+						"kitty --execute"     # Kitty
+						"gnome-terminal --"   # GNOME
+						"lxterminal -e"       # LXDE
+						"tilix -e"            # Tilix (VTE-based)
+						"alacritty --command" # Alacritty
+						"urxvt -e"            # RXVT
+						"terminator -e"       # Terminator
+						"deepin-terminal -e"  # Deepin
+						"wezterm start --"    # WezTerm
+						"xterm -e"            # XTerm
+					)
+
+					terminal_launched=false
+
+					for term in "${terminals[@]}"; do
+						cmd=($term) # Split into command and args
+						if command -v "${cmd[0]}" &>/dev/null; then
+							"${cmd[@]}" bash -c "printf ' 🔐 ' ; $pkgmngr_refresh ; $pkgmngr_install ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
+							terminal_launched=true
+							break # Exit the loop after the first successful command
+						fi
+					done
+
+					# Only show error if *no* terminal could be launched
+					if [[ "$terminal_launched" == false ]]; then
+						echo "No terminal emulator found. Please install xfce4-terminal, kitty, konsole, gnome-terminal, xterm, or another commonly installed terminal emulator or use this program in TUI mode." |
+							zenity --info --title="$app_name: Notification" --text="$(cat)" $default_messagebox_gui_dimensions
+					fi
+				fi
+
+				# exec bash
+				endprog
+			else
+				cat
+				printf " 🔐 "
+				$pkgmngr_refresh
+				$pkgmngr_install ${missing[*]}
+				endprog
+			fi
+
+			return 1
+		fi
+	}
+
+	# Check Programs Loop
+	if check_programs; then
+		#check_appimagelauncher
+
+		if [ "$gui_flag" = "1" ]; then
+			echo "# displaying report..." >&3
+		fi
+
+		sleep .3
+	else
+
+		if [ "$gui_flag" = "1" ]; then
+			echo "# displaying report..." >&3
+		fi
+
+		text_delay
+		echo "
+Please install missing packages using this $probe_name tool or by using the command below (in a terminal), then restart $app_name:
+
+$pkgmngr_install ${missing[*]}" | if [ "$gui_flag" = "1" ]; then
+			zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
+			endprog
+		else
+			cat | print_red
+		fi
+
+		if [ "$tui_flag" = "1" ]; then
+			divider
+			entertocontinue
+		fi
+
+		endprog
+	fi
+	#endregion
+}
+
+load_extensions() {
+	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+	echo "Extensions" | center
+	divider
+	echo ""
+	echo "Loading extensions...
+"
+
+	xprob_messages+=("")
+	xprob_messages+=("Extensions")
+
+	resolve_extension_dirs
+	shopt -s nullglob
+
+	local found_any="0"
+	local ext_files=()
+	local ext_dir
+	local file
+	local extension_filename
+
+	for ext_dir in "${extension_dirs[@]}"; do
+		ext_files=("$ext_dir"/*.ext)
+
+		for file in "${ext_files[@]}"; do
+			[ -f "$file" ] || continue
+			source "$file"
+			extension_filename="$(basename "$file")"
+			xprob_messages+=(" ✓ $extension_filename loaded")
+			found_any="1"
+		done
+	done
+
+	if [ "$found_any" = "0" ]; then
+		xprob_messages+=(" ✕ no extensions found.")
+		echo "No .ext files found"
+		sleep 2
+	fi
+}
+
+# =============================================================================
+# Menus
+# =============================================================================
+
+is_runnable_script() {
+	local file="$1"
+
+	[[ -f "$file" ]] || return 1
+
+	case "$file" in
+	*".$package_manager" | *.sh) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+run_selected_script() {
+	local full_path="$1"
+	local selection
+	selection="$(basename "$full_path")"
+
+	chmod +x "$full_path" >/dev/null 2>&1
+
+	if [ "$gui_flag" = "1" ]; then
+		exec 3> >(zenity --progress --pulsate --auto-close \
+			--text="Running $selection..." \
+			--title="$app_name: Action" \
+			$default_loading_gui_dimensions)
+		echo "# Running $selection..." >&3
+		sleep 1.2
+		echo "100" >&3
+		exec 3>&-
+	else
+		echo "
+Running $selection...
+
+$full_path" | center
+		divider
+		echo ""
+	fi
+
+	if [ "$gui_flag" = "1" ]; then
+		if [ "$package_manager" = "apt" ]; then
+			x-terminal-emulator -e bash -c "\"$full_path\"; echo; read -p 'Press enter to continue'"
+		else
+			terminals=(
+				"xfce4-terminal -x"
+				"konsole --execute"
+				"mate-terminal -x"
+				"kitty --execute"
+				"gnome-terminal --"
+				"lxterminal -e"
+				"tilix -e"
+				"alacritty --command"
+				"urxvt -e"
+				"terminator -e"
+				"deepin-terminal -e"
+				"wezterm start --"
+				"xterm -e"
+			)
+
+			terminal_launched=false
+
+			for term in "${terminals[@]}"; do
+				cmd=($term)
+				if command -v "${cmd[0]}" &>/dev/null; then
+					"${cmd[@]}" bash -c "\"$full_path\"; echo; read -p 'Press enter to continue'"
+					terminal_launched=true
+					break
+				fi
+			done
+
+			if [[ "$terminal_launched" == false ]]; then
+				echo "No terminal emulator found. Please install xfce4-terminal, kitty, konsole, gnome-terminal, xterm, or another common terminal emulator, or use this program in TUI mode." |
+					zenity --info --title="$app_name: Notification" --text="$(cat)" $default_messagebox_gui_dimensions
+			fi
+		fi
+	else
+		sleep .3
+		"$full_path"
+		divider
+		entertocontinue | center
+	fi
+}
+
+view_script_source() {
+	local dir="$1"
+	local scripts=()
+	local file
+	local selection
+	local full_path=""
+
+	shopt -s nullglob
+
+	for file in "$dir"/*; do
+		if is_runnable_script "$file"; then
+			scripts+=("$(basename "$file")")
+		fi
+	done
+
+	if [ ${#scripts[@]} -eq 0 ]; then
+		if [ "$gui_flag" = "1" ]; then
+			zenity --error --title="$app_name: Notification" \
+				--text="No $app_name compatible files detected in this directory." \
+				$default_messagebox_gui_dimensions
+		else
+			echo "No $app_name compatible files detected in this directory." | center
+			entertocontinue
+		fi
+		return
+	fi
+
+	if [ "$gui_flag" = "1" ]; then
+		selection=$(zenity --list --column="Scripts" "${scripts[@]}" \
+			"<- Back" \
+			$default_mainmenu_gui_dimensions \
+			--title="$app_name: View Source" \
+			--ok-label="Open" \
+			--cancel-label="<- Back")
+		[ $? -ne 0 ] && return
+	else
+		cursor_menu " " selection "${scripts[@]}" "<- Back"
+	fi
+
+	[ "$selection" = "<- Back" ] && return
+
+	full_path="$dir/$selection"
+
+	if [[ ! -f "$full_path" ]]; then
+		if [ "$gui_flag" = "1" ]; then
+			zenity --error --text="Error: Could not find the full path for $selection."
+		else
+			echo "
+Error: Could not find the full path for $selection.
+" | center
+			entertocontinue
+		fi
+		return
+	fi
+
+	nano "$full_path"
+}
+
+browse_menu() {
+	local dir="$1"
+	local root="$2"
+	local selection
+	local entries=()
+	local subdirs=()
+	local scripts=()
+	local item
+	local rel_path
+
+	shopt -s nullglob
+
+	while true; do
+		subdirs=()
+		scripts=()
+		entries=()
+
+		for item in "$dir"/*; do
+			[[ -d "$item" ]] && subdirs+=("📁 ${item##*/}")
+		done
+
+		for item in "$dir"/*; do
+			if is_runnable_script "$item"; then
+				scripts+=("📄 $(basename "$item")")
+			fi
+		done
+
+		entries+=("${subdirs[@]}")
+		entries+=("${scripts[@]}")
+
+		if [ "$dir" = "$root" ]; then
+			local ext_key
+
+			for ext_key in "${ext_menu_order[@]}"; do
+				[ -n "${ext_menu_labels[$ext_key]}" ] || continue
+				entries+=("${ext_menu_labels[$ext_key]}")
+			done
+
+			entries+=("📋 View $probe_name Report" "🪪 About $app_name")
+			entries+=("🚪 Exit $app_name")
+		else
+			if [ "$tui_flag" = "1" ]; then
+				entries+=("View Action's Source Code" "<- Back")
+			fi
+		fi
+
+		if [ ${#subdirs[@]} -eq 0 ] && [ ${#scripts[@]} -eq 0 ] && [ "$dir" != "$root" ]; then
+			if [ "$gui_flag" = "1" ]; then
+				zenity --error --title="$app_name: Notification" \
+					--text="No $app_name compatible files detected in this directory." \
+					$default_messagebox_gui_dimensions
+			else
+				echo "No $app_name compatible files detected in this directory." | center
+				entertocontinue
+			fi
+			return
+		fi
+
+		clear && printf '\e[3J'
+		jsforge_banner
+		echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+
+		rel_path="${dir#$root}"
+		rel_path="${rel_path#/}"
+		local zenity_text
+
+		if [ -z "$rel_path" ]; then
+			zenity_text="Main Menu"
+		else
+			zenity_text="$(printf 'Main Menu\n%s' "${rel_path//\// -> }")"
+		fi
+
+		echo "$zenity_text" | center
+		divider
+		echo "
+Select a menu option:" | center
+
+		if [ "$gui_flag" = "1" ]; then
+			selection=$(zenity --list \
+				--title="$app_name" \
+				--text="$zenity_text" \
+				--column="Options" "${entries[@]}" \
+				$default_mainmenu_gui_dimensions \
+				--ok-label="Select" \
+				--cancel-label="$([ "$dir" = "$root" ] && echo "Exit" || echo "<- Back")")
+			exit_code=$?
+			if [ "$exit_code" -ne 0 ]; then
+				if [ "$dir" = "$root" ]; then
+					exit_override="1"
+					return
+				else
+					return
+				fi
+			fi
+		else
+			cursor_menu " " selection "${entries[@]}"
+		fi
+
+		local ext_key
+
+		for ext_key in "${ext_menu_order[@]}"; do
+			if [ "$selection" = "${ext_menu_labels[$ext_key]}" ]; then
+				"${ext_menu_actions[$ext_key]}"
+				continue 2
+			fi
+		done
+
+		case "$selection" in
+		"📋 View $probe_name Report")
+			if [ "$gui_flag" = "1" ]; then
+				printf '%s\n' "${xprob_messages[@]}" | zenity --text-info \
+					--title="$app_name: $probe_name Report" \
+					$default_mainmenu_gui_dimensions
+			else
+				divider
+				echo ""
+				printf '%s\n' "${xprob_messages[@]}"
+				divider
+				entertocontinue
+			fi
+			;;
+		"🪪 About $app_name")
+			credits
+			;;
+		"View Action's Source Code")
+			view_script_source "$dir"
+			;;
+		"<- Back")
+			return
+			;;
+		"🚪 Exit $app_name")
+			exit_override="1"
+			return
+			;;
+		"📁 "*)
+			browse_menu "$dir/${selection#📁 }" "$root"
+			;;
+
+		"📄 "*)
+			local script_name="${selection#📄 }"
+			if [[ -f "$dir/$script_name" ]]; then
+				run_selected_script "$dir/$script_name"
+			else
+				if [ "$gui_flag" = "1" ]; then
+					zenity --error --text="Error: Could not find the full path for $script_name."
+				else
+					echo "
+Error: Could not find the full path for $script_name.
+" | center
+					entertocontinue
+				fi
+			fi
+			;;
+
+		*)
+			...
+			;;
+		esac
+	done
+}
+
+# =============================================================================
+# Runtime
+# =============================================================================
+
+# -s/script Variable Loading Switch
+if [ "$1" == -s ]; then
+
+	clear
+	variables
+	jsforge_banner
+	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+	echo "Script Runtime Environment" | center
+	divider
+	#echo ""
+	#echo " ✓ variables loaded."
+	sleep .5
+
+	if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+		# Executed directly
+		clear
+	else
+		# Sourced
+		#divider
+		echo ""
+	fi
+
+fi
+
+# Main Startup Switch
+if [ "$1" == "" ]; then
+
+	variables
+
+	eula_prompt
+
+	if [ "$gui_flag" = "1" ]; then
+		# Send progress updates to Zenity on a separate file descriptor
+		exec 3> >(zenity --progress --pulsate --auto-close --text="Running $probe_name..." --title="$app_name: $probe_name Analysis" $default_loading_gui_dimensions --no-cancel)
+		echo "# scanning system..." >&3
+		xprobe
+		load_extensions
+		echo "100" >&3
+		exec 3>&-                                                                                                                                      # Close fd
+		printf '%s\n' "${xprob_messages[@]}" | zenity --text-info --title="$app_name: $probe_name Report" --timeout=3 $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label=""
+		#exit
+	else
+		clear
+		jsforge_banner
+		xprobe
+		sleep 1
+		clear
+		jsforge_banner
+		load_extensions
+	fi
+
+	if [ "$tui_flag" = "1" ]; then
+
+		sleep 1
+
+	fi
+
+	browse_menu "$app_script_folder_loc" "$app_script_folder_loc"
+
+	exit_override="1"
+
+	credits
+
+	clear
+
+	endprog
+
+fi
+
+# -t/testing Startup Switch
+if [ "$1" == "-t" ]; then
+
+	clear
+
+	variables
+
+	SCRIPT_PATH="$(readlink -f "$0")"
+	SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+
+	if [ "$SCRIPT_DIR" != "$app_install_loc" ]; then
+		# Not in install directory, running installer
+		jsforge_banner
+		echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+		echo "Installation Runtime" | center
+		divider
+		echo ""
+		echo " ✕ $app_name is not in installation directory, skipping to installer.
+"
+		echo "not ready... exiting..."
+		sleep 5
+		clear
+		endprog
+	fi
+
+fi

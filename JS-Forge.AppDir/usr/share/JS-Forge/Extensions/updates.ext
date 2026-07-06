@@ -1,0 +1,193 @@
+#!/bin/bash
+
+updates_repo_path="jcore92/JS-Forge"
+
+updates_repo_url="https://github.com/$updates_repo_path"
+updates_api_url="https://api.github.com/repos/$updates_repo_path/releases/latest"
+
+#updates_repo_url="https://forgejo.lan/$updates_repo_path"
+#updates_api_url="https://forgejo.lan/api/v1/repos/$updates_repo_path/releases/latest"
+
+updates_check_interval_days="30"
+updates_state_file="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/.last-update-check"
+updates_open_browser_on_gui="1"
+updates_sleep_seconds="3"
+
+updates_ext_register() {
+    local ext_key
+    ext_key="02_updates_ext"
+
+    ext_menu_order+=("$ext_key")
+    ext_menu_labels["$ext_key"]="🔔 Check for Updates"
+    ext_menu_actions["$ext_key"]="updates_ext_menu"
+}
+
+updates_current_version() {
+    echo "${app_ver_major}.${app_ver_minor}.${app_ver_build}"
+}
+
+updates_version_gt() {
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n 1)" = "$1" ] && [ "$1" != "$2" ]
+}
+
+updates_mark_check_time() {
+    mkdir -p "$(dirname "$updates_state_file")"
+    : > "$updates_state_file"
+}
+
+updates_check_due() {
+    [ ! -f "$updates_state_file" ] && return 0
+
+    local now
+    local last
+    local age_days
+
+    now="$(date +%s)"
+    last="$(stat -c %Y "$updates_state_file" 2>/dev/null || echo 0)"
+    age_days="$(( (now - last) / 86400 ))"
+
+    [ "$age_days" -ge "$updates_check_interval_days" ]
+}
+
+updates_fetch_latest() {
+    local response
+
+    response="$(curl -fsSL "$updates_api_url" 2>/dev/null)" || return 1
+
+    updates_latest_tag="$(printf '%s' "$response" | jq -r '.tag_name // empty')"
+    updates_latest_url="$(printf '%s' "$response" | jq -r '.html_url // empty')"
+
+    [ -n "$updates_latest_tag" ] || return 1
+
+    updates_latest_tag="${updates_latest_tag#v}"
+    [ -n "$updates_latest_url" ] || updates_latest_url="$updates_repo_url"
+
+    return 0
+}
+
+updates_notify_available() {
+    local current_version
+    current_version="$(updates_current_version)"
+
+    if [ "$gui_flag" = "1" ]; then
+        if zenity --question \
+            --title="$app_name: Update Available" \
+            --text="A newer version of $app_name is available.
+
+Current version: $current_version
+Latest version: $updates_latest_tag
+
+Open the GitHub page now?" \
+            $default_mainmenu_gui_dimensions; then
+            if [ "$updates_open_browser_on_gui" = "1" ] && [ -n "$updates_latest_url" ]; then
+                xdg-open "$updates_latest_url" >/dev/null 2>&1 &
+            fi
+        fi
+    else
+        echo ""
+        echo "Update available for $app_name."
+        echo "Current version: $current_version"
+        echo "Latest version: $updates_latest_tag"
+        echo "Download page: $updates_latest_url"
+        echo ""
+        sleep "$updates_sleep_seconds"
+    fi
+}
+
+updates_notify_current_manual() {
+    local current_version
+    current_version="$(updates_current_version)"
+
+    if [ "$gui_flag" = "1" ]; then
+        zenity --info \
+            --title="$app_name: Updates" \
+            --text="$app_name is up to date.
+
+Current version: $current_version" \
+            $default_messagebox_gui_dimensions
+    else
+        echo ""
+        echo "$app_name is up to date."
+        echo "Current version: $current_version"
+        echo ""
+        sleep "$updates_sleep_seconds"
+    fi
+}
+
+updates_notify_error_manual() {
+    if [ "$gui_flag" = "1" ]; then
+        zenity --warning \
+            --title="$app_name: Updates" \
+            --text="Unable to check for updates right now." \
+            $default_messagebox_gui_dimensions
+    else
+        echo ""
+        echo "Unable to check for updates right now."
+        echo ""
+        sleep "$updates_sleep_seconds"
+    fi
+}
+
+updates_run_check() {
+    local mode="$1"
+    local current_version
+
+    current_version="$(updates_current_version)"
+
+    if [ "$mode" = "auto" ]; then
+        updates_check_due || return 0
+    fi
+
+    if [ "$mode" = "auto" ] && [ "$tui_flag" = "1" ]; then
+        echo "Checking for updates..."
+    fi
+
+    if ! updates_fetch_latest; then
+        if [ "$mode" = "manual" ]; then
+            updates_notify_error_manual
+        elif [ "$mode" = "auto" ] && [ "$tui_flag" = "1" ]; then
+            echo " ✕ Update check skipped
+"
+            sleep "$updates_sleep_seconds"
+        fi
+        return 1
+    fi
+
+    updates_mark_check_time
+
+    if updates_version_gt "$updates_latest_tag" "$current_version"; then
+        if [ "$mode" = "auto" ] && [ "$tui_flag" = "1" ]; then
+            echo " ✓ Update found
+"
+        fi
+        updates_notify_available
+        return 0
+    fi
+
+    if [ "$mode" = "manual" ]; then
+        updates_notify_current_manual
+    elif [ "$mode" = "auto" ] && [ "$tui_flag" = "1" ]; then
+        echo " ✓ No updates found
+"
+        sleep "$updates_sleep_seconds"
+    fi
+
+    return 0
+}
+
+updates_ext_menu() {
+    updates_run_check "manual"
+}
+
+updates_ext_startup_check() {
+    updates_run_check "auto"
+}
+
+# If your GitHub releases will use tags like v2.0.0, this code already strips the leading v before comparing versions. That should match your current app version variables cleanly.
+
+echo "Loading updates extension..."
+updates_ext_register
+echo " ✓ loaded extension"
+echo ""
+
+updates_ext_startup_check
