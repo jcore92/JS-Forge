@@ -1,7 +1,5 @@
 #!/bin/bash
 
-echo "Loading systemd extension..."
-
 if [[ -d /run/systemd/system ]]; then
 
 	text_delay

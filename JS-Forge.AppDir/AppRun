@@ -103,6 +103,8 @@ variables() {
 
 	current_user="$whoami"
 
+	declare -ga xprob_messages=()
+
 	detect_display_server() {
 		if [ -n "$WAYLAND_DISPLAY" ] && [ -n "$DISPLAY" ]; then
 			echo "XWayland / Wayland"
@@ -643,42 +645,54 @@ echo ""
 echo "Loading extensions..."
 echo ""
 
-xprob_messages+=("")
-xprob_messages+=("Extensions")
-
-resolve_extension_dirs
-shopt -s nullglob
-
-local found_any="0"
-local ext_files=()
+local extension_dirs=()
 local ext_dir
 local file
 local extension_filename
-declare -A loaded_extension_names=()
+local found_any="0"
+local ext_report_lines=()
 
-for ext_dir in "${extension_dirs[@]}"; do
-ext_files=("$ext_dir"/*.ext)
+declare -A loaded_extension_names
 
-for file in "${ext_files[@]}"; do
-[ -f "$file" ] || continue
-
-extension_filename="$(basename "$file")"
-
-if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
-continue
+if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
+    extension_dirs+=("$APPDIR")
 fi
 
-source "$file"
-loaded_extension_names["$extension_filename"]="1"
-xprob_messages+=(" ✓ $extension_filename loaded")
-found_any="1"
-done
+extension_dirs+=("$app_script_folder_loc")
+
+for ext_dir in "${extension_dirs[@]}"; do
+    [ -d "$ext_dir" ] || continue
+
+    shopt -s nullglob
+    for file in "$ext_dir"/*.ext; do
+        [ -f "$file" ] || continue
+
+        extension_filename="$(basename "$file")"
+
+        if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
+            continue
+        fi
+
+        echo "Loading $extension_filename extension."
+        echo ""
+
+        source "$file"
+        loaded_extension_names["$extension_filename"]="1"
+        ext_report_lines+=(" ✓ $extension_filename loaded")
+        found_any="1"
+    done
+    shopt -u nullglob
 done
 
+xprob_messages+=("")
+xprob_messages+=("Extensions")
+
 if [ "$found_any" = "0" ]; then
-xprob_messages+=(" ✕ no extensions found.")
-echo "No .ext files found"
-sleep 2
+    xprob_messages+=(" ✕ no extensions found.")
+    echo "No .ext files found"
+    sleep 2
+else
+    xprob_messages+=("${ext_report_lines[@]}")
 fi
 }
 
@@ -810,7 +824,7 @@ browse_menu() {
 				entries+=("${ext_menu_labels[$ext_key]}")
 			done
 
-			entries+=("📋 View $probe_name Report" "🪪 About $app_name")
+			entries+=("🪪 About $app_name")
 			entries+=("🚪 Exit $app_name")
 		else
 			if [ "$tui_flag" = "1" ]; then
@@ -880,19 +894,6 @@ Select a menu option:" | center
 		done
 
 		case "$selection" in
-		"📋 View $probe_name Report")
-			if [ "$gui_flag" = "1" ]; then
-				printf '%s\n' "${xprob_messages[@]}" | zenity --text-info \
-					--title="$app_name: $probe_name Report" \
-					$default_mainmenu_gui_dimensions
-			else
-				divider
-				echo ""
-				printf '%s\n' "${xprob_messages[@]}"
-				divider
-				entertocontinue
-			fi
-			;;
 		"🪪 About $app_name")
 			credits
 			;;

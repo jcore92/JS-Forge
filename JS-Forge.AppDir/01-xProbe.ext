@@ -1,13 +1,31 @@
 #!/bin/bash
 
+xprobe_view_report() {
+    if [ "$gui_flag" = "1" ]; then
+        printf '%s\n' "${xprob_messages[@]}" | zenity --text-info \
+            --title="$app_name: $probe_name Report" \
+            $default_mainmenu_gui_dimensions
+    else
+        divider
+        echo ""
+        printf '%s\n' "${xprob_messages[@]}"
+        divider
+        entertocontinue
+    fi
+}
+
+xprobe_register() {
+    local ext_key
+    ext_key="xprobe_report"
+
+    ext_menu_order+=("$ext_key")
+    ext_menu_labels["$ext_key"]="📋 View $probe_name Report"
+    ext_menu_actions["$ext_key"]="xprobe_view_report"
+}
+
 xprobe() {
 
-echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
-echo "$probe_name Report" | center
-divider
-echo ""
-
-xprob_messages=()
+#xprob_messages=()
 
 text_delay
 echo "Checking environment..."
@@ -81,8 +99,7 @@ xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
 text_delay
 echo " ✕ apt package manager NOT installed
 Enabling the package manager bridge compatibility layer...
-(package manager bridge support: zypper, pacman, dnf, yum.)
-" | if [ "$gui_flag" = "1" ]; then
+(package manager bridge support: zypper, pacman, dnf, yum.)" | if [ "$gui_flag" = "1" ]; then
 zenity --progress --pulsate --timeout=2 --text="Enabling package manager bridge for non-apt distros..." --title="$app_name: package manager bridge" $default_loading_gui_dimensions --no-cancel &
 else
 cat | print_red
@@ -191,6 +208,9 @@ fi
 
 endprog
 fi
+
+echo ""
 }
 
+xprobe_register
 xprobe

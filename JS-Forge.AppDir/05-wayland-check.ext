@@ -1,10 +1,8 @@
 #!/bin/bash
 
-echo "Loading wayland extension..."
-
 #local detected_display_server="wayland"
 
-if [[ "$detected_display_server" == "wayland" ]]; then
+if [[ "$detected_display_server" == *wayland* ]]; then
 
 	text_delay
 	echo "
