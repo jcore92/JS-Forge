@@ -1,5 +1,8 @@
 #!/bin/bash
 
+[ "${updates_ext_loaded:-0}" = "1" ] && return
+updates_ext_loaded="1"
+
 updates_repo_path="jcore92/JS-Forge"
 
 updates_repo_url="https://github.com/$updates_repo_path"

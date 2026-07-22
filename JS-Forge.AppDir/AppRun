@@ -636,42 +636,50 @@ THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMP
 }
 
 load_extensions() {
-	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
-	echo "Extensions" | center
-	divider
-	echo ""
-	echo "Loading extensions...
-"
+echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+echo "Extensions" | center
+divider
+echo ""
+echo "Loading extensions..."
+echo ""
 
-	xprob_messages+=("")
-	xprob_messages+=("Extensions")
+xprob_messages+=("")
+xprob_messages+=("Extensions")
 
-	resolve_extension_dirs
-	shopt -s nullglob
+resolve_extension_dirs
+shopt -s nullglob
 
-	local found_any="0"
-	local ext_files=()
-	local ext_dir
-	local file
-	local extension_filename
+local found_any="0"
+local ext_files=()
+local ext_dir
+local file
+local extension_filename
+declare -A loaded_extension_names=()
 
-	for ext_dir in "${extension_dirs[@]}"; do
-		ext_files=("$ext_dir"/*.ext)
+for ext_dir in "${extension_dirs[@]}"; do
+ext_files=("$ext_dir"/*.ext)
 
-		for file in "${ext_files[@]}"; do
-			[ -f "$file" ] || continue
-			source "$file"
-			extension_filename="$(basename "$file")"
-			xprob_messages+=(" ✓ $extension_filename loaded")
-			found_any="1"
-		done
-	done
+for file in "${ext_files[@]}"; do
+[ -f "$file" ] || continue
 
-	if [ "$found_any" = "0" ]; then
-		xprob_messages+=(" ✕ no extensions found.")
-		echo "No .ext files found"
-		sleep 2
-	fi
+extension_filename="$(basename "$file")"
+
+if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
+continue
+fi
+
+source "$file"
+loaded_extension_names["$extension_filename"]="1"
+xprob_messages+=(" ✓ $extension_filename loaded")
+found_any="1"
+done
+done
+
+if [ "$found_any" = "0" ]; then
+xprob_messages+=(" ✕ no extensions found.")
+echo "No .ext files found"
+sleep 2
+fi
 }
 
 # =============================================================================

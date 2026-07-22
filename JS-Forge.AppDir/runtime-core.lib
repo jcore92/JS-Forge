@@ -19,6 +19,7 @@ jsf_detect_package_manager
 resolve_extension_dirs() {
 local script_dir
 local user_ext_dir
+declare -A seen_dirs=()
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd)"
 user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
@@ -26,14 +27,31 @@ user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 extension_dirs=()
 
 if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
-extension_dirs+=("$APPDIR")
+local real_appdir
+real_appdir="$(cd -- "$APPDIR" && pwd)"
+if [ -z "${seen_dirs[$real_appdir]}" ]; then
+extension_dirs+=("$real_appdir")
+seen_dirs["$real_appdir"]="1"
+fi
 fi
 
-[ -d "$script_dir" ] && extension_dirs+=("$script_dir")
+if [ -d "$script_dir" ]; then
+local real_script_dir
+real_script_dir="$(cd -- "$script_dir" && pwd)"
+if [ -z "${seen_dirs[$real_script_dir]}" ]; then
+extension_dirs+=("$real_script_dir")
+seen_dirs["$real_script_dir"]="1"
+fi
+fi
 
 if [ "$allow_user_extensions" = "1" ]; then
 mkdir -p "$user_ext_dir"
-extension_dirs+=("$user_ext_dir")
+local real_user_dir
+real_user_dir="$(cd -- "$user_ext_dir" && pwd)"
+if [ -z "${seen_dirs[$real_user_dir]}" ]; then
+extension_dirs+=("$real_user_dir")
+seen_dirs["$real_user_dir"]="1"
+fi
 fi
 }
 

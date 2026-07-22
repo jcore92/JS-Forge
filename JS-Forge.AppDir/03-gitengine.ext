@@ -1,13 +1,17 @@
 #!/bin/bash
 
+[ "${gitengine_ext_loaded:-0}" = "1" ] && return
+gitengine_ext_loaded="1"
+
 echo "Loading gitengine extension..."
 
 echo " ✓ loaded extension
 "
 
-ext_menu_order+=(01)
-ext_menu_labels[01]="🌿 GitEngine Options"
-ext_menu_actions[01]="gitengine_menu"
+ext_key="03_gitengine_ext"
+ext_menu_order+=("$ext_key")
+ext_menu_labels["$ext_key"]="🌿 GitEngine Options"
+ext_menu_actions["$ext_key"]="gitengine_menu"
 
 gitengine_repository_list="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/gitengine-repositories.txt"
 
