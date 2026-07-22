@@ -175,11 +175,57 @@ variables() {
 		echo "$current_desktop"
 	}
 
+	detect_hostname() {
+		if command -v hostname >/dev/null 2>&1; then
+			hostname
+		else
+			cat /proc/sys/kernel/hostname 2>/dev/null
+		fi
+	}
+
+	detect_lan_ip() {
+		local lan_ip
+
+		if command -v hostname >/dev/null 2>&1; then
+			lan_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+		fi
+
+		if [ -z "$lan_ip" ] && command -v ip >/dev/null 2>&1; then
+			lan_ip="$(ip route get 1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i=="src") {print $(i+1); exit}}')"
+		fi
+
+		[ -n "$lan_ip" ] && echo "$lan_ip" || echo "Unknown"
+	}
+
+	detect_init_system() {
+		local init_name
+
+		if [ -r /proc/1/comm ]; then
+			init_name="$(tr -d '\n' </proc/1/comm)"
+		elif command -v ps >/dev/null 2>&1; then
+			init_name="$(ps -p 1 -o comm= 2>/dev/null | awk '{print $1}')"
+		fi
+
+		case "$init_name" in
+		systemd) echo "systemd" ;;
+		init) echo "sysVinit" ;;
+		runit) echo "runit" ;;
+		openrc-init | openrc) echo "OpenRC" ;;
+		s6-svscan) echo "s6" ;;
+		dinit) echo "dinit" ;;
+		busybox) echo "busybox init" ;;
+		*) [ -n "$init_name" ] && echo "$init_name" || echo "Unknown" ;;
+		esac
+	}
+
 	#local detected_display_server
 	#local detected_desktop_environment
 
 	detected_display_server="$(detect_display_server)"
 	detected_desktop_environment="$(detect_desktop_environment)"
+	detected_hostname="$(detect_hostname)"
+	detected_lan_ip="$(detect_lan_ip)"
+	detected_init_system="$(detect_init_system)"
 
 	# =============================================================================
 	# DEFAULT GUI WINDOW SIZES & OVERRIDES BASED ON DE:
@@ -638,62 +684,62 @@ THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMP
 }
 
 load_extensions() {
-echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
-echo "Extensions" | center
-divider
-echo ""
-echo "Loading extensions..."
-echo ""
+	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+	echo "Extensions" | center
+	divider
+	echo ""
+	echo "Loading extensions..."
+	echo ""
 
-local extension_dirs=()
-local ext_dir
-local file
-local extension_filename
-local found_any="0"
-local ext_report_lines=()
+	local extension_dirs=()
+	local ext_dir
+	local file
+	local extension_filename
+	local found_any="0"
+	local ext_report_lines=()
 
-declare -A loaded_extension_names
+	declare -A loaded_extension_names
 
-if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
-    extension_dirs+=("$APPDIR")
-fi
+	if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
+		extension_dirs+=("$APPDIR")
+	fi
 
-extension_dirs+=("$app_script_folder_loc")
+	extension_dirs+=("$app_script_folder_loc")
 
-for ext_dir in "${extension_dirs[@]}"; do
-    [ -d "$ext_dir" ] || continue
+	for ext_dir in "${extension_dirs[@]}"; do
+		[ -d "$ext_dir" ] || continue
 
-    shopt -s nullglob
-    for file in "$ext_dir"/*.ext; do
-        [ -f "$file" ] || continue
+		shopt -s nullglob
+		for file in "$ext_dir"/*.ext; do
+			[ -f "$file" ] || continue
 
-        extension_filename="$(basename "$file")"
+			extension_filename="$(basename "$file")"
 
-        if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
-            continue
-        fi
+			if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
+				continue
+			fi
 
-        echo "Loading $extension_filename extension."
-        echo ""
+			echo "Loading $extension_filename extension."
+			echo ""
 
-        source "$file"
-        loaded_extension_names["$extension_filename"]="1"
-        ext_report_lines+=(" ✓ $extension_filename loaded")
-        found_any="1"
-    done
-    shopt -u nullglob
-done
+			source "$file"
+			loaded_extension_names["$extension_filename"]="1"
+			ext_report_lines+=(" ✓ $extension_filename loaded")
+			found_any="1"
+		done
+		shopt -u nullglob
+	done
 
-xprob_messages+=("")
-xprob_messages+=("Extensions")
+	xprob_messages+=("")
+	xprob_messages+=("Extensions")
 
-if [ "$found_any" = "0" ]; then
-    xprob_messages+=(" ✕ no extensions found.")
-    echo "No .ext files found"
-    sleep 2
-else
-    xprob_messages+=("${ext_report_lines[@]}")
-fi
+	if [ "$found_any" = "0" ]; then
+		xprob_messages+=(" ✕ no extensions found.")
+		echo "No .ext files found"
+		sleep 2
+	else
+		xprob_messages+=("${ext_report_lines[@]}")
+	fi
 }
 
 # =============================================================================
@@ -722,6 +768,7 @@ run_selected_script() {
 		jsf_launch_terminal_script "$full_path"
 	else
 		sleep .3
+		echo ""
 		"$full_path"
 		divider
 		entertocontinue | center

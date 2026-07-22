@@ -24,192 +24,263 @@ xprobe_register() {
 }
 
 xprobe() {
+    text_delay
+    echo "Checking environment..."
 
-#xprob_messages=()
+    if [ -z "$SSH_CONNECTION" ] && [ -z "$SSH_TTY" ] && [ -t 0 ] && [[ "$(tty 2>/dev/null)" == /dev/tty* ]]; then
+        text_delay
+        echo " ✕ TTY is not supported. Please use a Desktop Environment to open $app_name." | if [ "$gui_flag" = "1" ]; then
+            zenity --text-info $default_mainmenu_gui_dimensions
+        else
+            cat | print_red
+        fi
 
-text_delay
-echo "Checking environment..."
+        if [ "$tui_flag" = "1" ]; then
+            divider
+            entertocontinue
+        fi
+        exit
+    fi
 
-if [ -z "$SSH_CONNECTION" ] && [ -z "$SSH_TTY" ] && [ -t 0 ] && [[ "$(tty 2>/dev/null)" == /dev/tty* ]]; then
-text_delay
-echo " ✕ TTY is not supported. Please use a Desktop Environment to open $app_name." | if [ "$gui_flag" = "1" ]; then
-zenity --text-info $default_mainmenu_gui_dimensions
-else
-cat | print_red
-fi
+    if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$IS_WSL" ]; then
+        text_delay
+        echo " ✕ WSL is not supported." | if [ "$gui_flag" = "1" ]; then
+            zenity --text-info $default_mainmenu_gui_dimensions
+        else
+            cat | print_red
+        fi
 
-if [ "$tui_flag" = "1" ]; then
-divider
-entertocontinue
-fi
-exit
-fi
+        if [ "$tui_flag" = "1" ]; then
+            divider
+            entertocontinue
+        fi
+        exit
+    fi
 
-if [ -n "$WSL_DISTRO_NAME" ] || [ -n "$IS_WSL" ]; then
-text_delay
-echo " ✕ WSL is not supported." | if [ "$gui_flag" = "1" ]; then
-zenity --text-info $default_mainmenu_gui_dimensions
-else
-cat | print_red
-fi
-
-if [ "$tui_flag" = "1" ]; then
-divider
-entertocontinue
-fi
-exit
-fi
-
-if [ "$package_manager" != "apt" ] && [ "$package_manager" != "zypper" ] && [ "$package_manager" != "dnf" ] && [ "$package_manager" != "pacman" ] && [ "$package_manager" != "yum" ]; then
-text_delay
-echo " ✕ Unsupported package manager '$package_manager'.
+    if [ "$package_manager" != "apt" ] && [ "$package_manager" != "zypper" ] && [ "$package_manager" != "dnf" ] && [ "$package_manager" != "pacman" ] && [ "$package_manager" != "yum" ]; then
+        text_delay
+        echo " ✕ Unsupported package manager '$package_manager'.
 
 Program cannot continue, exiting." | if [ "$gui_flag" = "1" ]; then
-zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
-else
-cat | print_red
-fi
+            zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
+        else
+            cat | print_red
+        fi
 
-if [ "$tui_flag" = "1" ]; then
-divider
-entertocontinue
-fi
+        if [ "$tui_flag" = "1" ]; then
+            divider
+            entertocontinue
+        fi
 
-exit
-fi
+        exit
+    fi
 
-prettyname="$(grep 'PRETTY_NAME' /etc/os-release | awk -F '"' '{print $2}')"
+    prettyname="$(grep 'PRETTY_NAME' /etc/os-release | awk -F '"' '{print $2}')"
 
-if grep -qi "ubuntu" /etc/os-release; then
-xprob_messages+=("$prettyname")
-xprob_messages+=(" ✓ package manager: $package_manager")
-xprob_messages+=(" ✓ package manager bridge: disabled")
-xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
-elif grep -qi "debian" /etc/os-release; then
-xprob_messages+=("$prettyname")
-xprob_messages+=(" ✓ package manager: $package_manager")
-xprob_messages+=(" ✓ package manager bridge: disabled")
-xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
-else
-xprob_messages+=("$prettyname")
-xprob_messages+=(" ✓ package manager: $package_manager")
-xprob_messages+=(" ✓ package manager bridge: enabled")
-xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
+    if grep -qi "ubuntu" /etc/os-release; then
+        xprob_messages+=("$prettyname")
+        xprob_messages+=("$detected_hostname - $detected_lan_ip")
+        xprob_messages+=(" ✓ package manager: $package_manager")
+        xprob_messages+=(" ✓ package manager bridge: disabled")
+        xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
+    elif grep -qi "debian" /etc/os-release; then
+        xprob_messages+=("$prettyname")
+        xprob_messages+=("$detected_hostname - $detected_lan_ip")
+        xprob_messages+=(" ✓ package manager: $package_manager")
+        xprob_messages+=(" ✓ package manager bridge: disabled")
+        xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
+    else
+        xprob_messages+=("$prettyname")
+        xprob_messages+=("$detected_hostname - $detected_lan_ip")
+        xprob_messages+=(" ✓ package manager: $package_manager")
+        xprob_messages+=(" ✓ package manager bridge: enabled")
+        xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
 
-text_delay
-echo " ✕ apt package manager NOT installed
+        text_delay
+        echo " ✕ apt package manager NOT installed
 Enabling the package manager bridge compatibility layer...
 (package manager bridge support: zypper, pacman, dnf, yum.)" | if [ "$gui_flag" = "1" ]; then
-zenity --progress --pulsate --timeout=2 --text="Enabling package manager bridge for non-apt distros..." --title="$app_name: package manager bridge" $default_loading_gui_dimensions --no-cancel &
-else
-cat | print_red
-fi
-fi
+            zenity --progress --pulsate --timeout=2 --text="Enabling package manager bridge for non-apt distros..." --title="$app_name: package manager bridge" $default_loading_gui_dimensions --no-cancel &
+        else
+            cat | print_red
+        fi
+    fi
 
-text_delay
-echo "$prettyname" | if [ "$tui_flag" = "1" ]; then cat; fi
+    text_delay
+    echo "$prettyname" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-text_delay
-echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then cat; fi
+    text_delay
+    echo "$detected_hostname - $detected_lan_ip" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-if grep -qi "ubuntu" /etc/os-release || grep -qi "debian" /etc/os-release; then
-if [ "$tui_flag" = "1" ]; then
-echo " ✓ package manager bridge: disabled"
-fi
-else
-if [ "$tui_flag" = "1" ]; then
-echo " ✓ package manager bridge: enabled"
-fi
-fi
+    text_delay
+    echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-text_delay
-echo " ✓ desktop environment: $detected_desktop_environment" | if [ "$tui_flag" = "1" ]; then cat; fi
+    if grep -qi "ubuntu" /etc/os-release || grep -qi "debian" /etc/os-release; then
+        if [ "$tui_flag" = "1" ]; then
+            echo " ✓ package manager bridge: disabled"
+        fi
+    else
+        if [ "$tui_flag" = "1" ]; then
+            echo " ✓ package manager bridge: enabled"
+        fi
+    fi
 
-xprob_messages+=(" ✓ display server: $detected_display_server")
+    text_delay
+    echo " ✓ desktop environment: $detected_desktop_environment" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-text_delay
-echo " ✓ display server: $detected_display_server" | if [ "$tui_flag" = "1" ]; then cat; fi
+    xprob_messages+=(" ✓ display server: $detected_display_server")
 
-tool_to_pkg_name() {
-case "$1" in
-"7z") echo "7zip" ;;
-"dig") echo "dnsutils" ;;
-"sha256sum") echo "coreutils" ;;
-"xdg-open") echo "xdg-utils" ;;
-"chsh") echo "shadow" ;;
-"tput") echo "ncurses" ;;
-*) echo "$1" ;;
-esac
-}
+    text_delay
+    echo " ✓ display server: $detected_display_server" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-check_programs() {
-declare -g missing=()
-local programs=("flatpak" "zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open")
-local prog
+    xprob_messages+=(" ✓ init system: $detected_init_system")
 
-for prog in "${programs[@]}"; do
-if ! command -v "$prog" >/dev/null 2>&1; then
-xprob_messages+=(" ✕ $prog is not installed")
-text_delay
-echo " ✕ $prog is not installed" | print_red | if [ "$tui_flag" = "1" ]; then cat; fi
-missing+=("$(tool_to_pkg_name "$prog")")
-else
-xprob_messages+=(" ✓ $prog is installed")
-text_delay
-echo " ✓ $prog is installed" | if [ "$tui_flag" = "1" ]; then cat; fi
-fi
-done
+    text_delay
+    echo " ✓ init system: $detected_init_system" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-if [ ${#missing[@]} -ne 0 ]; then
-text_delay
-echo "
+    tool_to_pkg_name() {
+        case "$1" in
+            "7z") echo "7zip" ;;
+            "dig") echo "dnsutils" ;;
+            "sha256sum") echo "coreutils" ;;
+            "xdg-open") echo "xdg-utils" ;;
+            "chsh") echo "shadow" ;;
+            "tput") echo "ncurses" ;;
+            *) echo "$1" ;;
+        esac
+    }
+
+    check_programs() {
+        declare -g missing=()
+        local programs=("flatpak" "zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open")
+        local prog
+
+        for prog in "${programs[@]}"; do
+            if ! command -v "$prog" >/dev/null 2>&1; then
+                xprob_messages+=(" ✕ $prog is not installed")
+                text_delay
+                echo " ✕ $prog is not installed" | print_red | if [ "$tui_flag" = "1" ]; then cat; fi
+                missing+=("$(tool_to_pkg_name "$prog")")
+            else
+                xprob_messages+=(" ✓ $prog is installed")
+                text_delay
+                echo " ✓ $prog is installed" | if [ "$tui_flag" = "1" ]; then cat; fi
+            fi
+        done
+
+        if [ ${#missing[@]} -ne 0 ]; then
+            text_delay
+            echo "
 Attempting to install package(s):
 '${missing[*]}'
 " | if [ "$gui_flag" = "1" ]; then
-zenity --text-info --timeout=4 $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Notification" --ok-label="" --cancel-label=""
-else
-cat
-fi
+                zenity --text-info --timeout=4 $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Notification" --ok-label="" --cancel-label=""
+            else
+                cat
+            fi
 
-if [ "$gui_flag" = "1" ]; then
-jsf_launch_terminal_command "printf ' 🔐 ' ; $pkgmngr_refresh ; $pkgmngr_install ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
-endprog
-else
-printf " 🔐 "
-$pkgmngr_refresh
-$pkgmngr_install ${missing[*]}
-endprog
-fi
+            if [ "$gui_flag" = "1" ]; then
+                jsf_launch_terminal_command "printf ' 🔐 ' ; $pkgmngr_refresh ; $pkgmngr_install ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
+                endprog
+            else
+                printf " 🔐 "
+                $pkgmngr_refresh
+                $pkgmngr_install ${missing[*]}
+                endprog
+            fi
 
-return 1
-fi
+            return 1
+        fi
 
-return 0
-}
+        return 0
+    }
 
-if check_programs; then
-sleep .3
-else
-text_delay
-echo "
+    check_flatpaks() {
+        local missing_flatpaks=()
+        local flatpak_app
+        local flatpak_name
+        local required_flatpaks=("it.mijorus.gearlever")
+
+        for flatpak_app in "${required_flatpaks[@]}"; do
+            case "$flatpak_app" in
+                "it.mijorus.gearlever") flatpak_name="Gear Lever" ;;
+                *) flatpak_name="$flatpak_app" ;;
+            esac
+
+            if flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$flatpak_app"; then
+                xprob_messages+=(" ✓ $flatpak_name is installed")
+                text_delay
+                echo " ✓ $flatpak_name is installed" | if [ "$tui_flag" = "1" ]; then cat; fi
+            else
+                xprob_messages+=(" ✕ $flatpak_name is not installed")
+                text_delay
+                echo " ✕ $flatpak_name is not installed" | print_red | if [ "$tui_flag" = "1" ]; then cat; fi
+                missing_flatpaks+=("$flatpak_app")
+            fi
+        done
+
+        if [ ${#missing_flatpaks[@]} -ne 0 ]; then
+            if ! flatpak remotes --columns=name 2>/dev/null | grep -Fxq "flathub"; then
+                flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+            fi
+
+            if [ "$gui_flag" = "1" ]; then
+                jsf_launch_terminal_command "flatpak install -y flathub ${missing_flatpaks[*]}; echo \"\"; read -p \"Press enter to continue\";"
+                endprog
+            else
+                flatpak install -y flathub ${missing_flatpaks[*]}
+                endprog
+            fi
+
+            return 1
+        fi
+
+        return 0
+    }
+
+    if check_programs; then
+        sleep .3
+    else
+        text_delay
+        echo "
 Please install missing packages using this $probe_name tool or by using the command below (in a terminal), then restart $app_name:
 
 $pkgmngr_install ${missing[*]}" | if [ "$gui_flag" = "1" ]; then
-zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
-endprog
-else
-cat | print_red
-fi
+            zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
+            endprog
+        else
+            cat | print_red
+        fi
 
-if [ "$tui_flag" = "1" ]; then
-divider
-entertocontinue
-fi
+        if [ "$tui_flag" = "1" ]; then
+            divider
+            entertocontinue
+        fi
 
-endprog
-fi
+        endprog
+    fi
 
-echo ""
+    if check_flatpaks; then
+        sleep .3
+    else
+        text_delay
+        echo "
+Please install missing Flatpak application(s), then restart $app_name." | if [ "$gui_flag" = "1" ]; then
+            zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label=""
+            endprog
+        else
+            cat | print_red
+        fi
+
+        if [ "$tui_flag" = "1" ]; then
+            divider
+            entertocontinue
+        fi
+
+        endprog
+    fi
+
+    echo ""
 }
 
 xprobe_register
