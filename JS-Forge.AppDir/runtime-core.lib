@@ -164,76 +164,84 @@ jsf_launch_terminal_script() {
 # =============================================================================
 
 jsf_detect_distro_family() {
-    local distro_id=""
-    local distro_like=""
+	local distro_id=""
+	local distro_like=""
 
-    if [ -r /etc/os-release ]; then
-        distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-        distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-    fi
+	if [ -r /etc/os-release ]; then
+		distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+		distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+	fi
 
-    case "$distro_id" in
-        debian|ubuntu|devuan)
-            echo "debian"
-            ;;
-        arch|artix)
-            echo "arch"
-            ;;
-        fedora|rhel|centos|rocky|almalinux)
-            echo "rhel"
-            ;;
-        *)
-            case "$distro_like" in
-                *debian*) echo "debian" ;;
-                *arch*) echo "arch" ;;
-                *rhel*|*fedora*) echo "rhel" ;;
-                *) echo "generic" ;;
-            esac
-            ;;
-    esac
+	case "$distro_id" in
+	debian | ubuntu | devuan)
+		echo "debian"
+		;;
+	arch | artix)
+		echo "arch"
+		;;
+	fedora | rhel | centos | rocky | almalinux)
+		echo "rhel"
+		;;
+	*)
+		case "$distro_like" in
+		*debian*) echo "debian" ;;
+		*arch*) echo "arch" ;;
+		*rhel* | *fedora*) echo "rhel" ;;
+		*) echo "generic" ;;
+		esac
+		;;
+	esac
 }
 
 jsf_tool_to_pkg_name() {
-    local family="${DISTRO_FAMILY:-$(jsf_detect_distro_family)}"
+	local family="${DISTRO_FAMILY:-$(jsf_detect_distro_family)}"
 
-    case "$family" in
-        debian)
-            case "$1" in
-                "7z") echo "7zip" ;;
-                "dig") echo "dnsutils" ;;
-                "sha256sum") echo "coreutils" ;;
-                "xdg-open") echo "xdg-utils" ;;
-                *) echo "$1" ;;
-            esac
-            ;;
-        arch)
-            case "$1" in
-                "7z") echo "7zip" ;;
-                "dig") echo "bind" ;;
-                "sha256sum") echo "coreutils" ;;
-                "xdg-open") echo "xdg-utils" ;;
-                *) echo "$1" ;;
-            esac
-            ;;
-        rhel)
-            case "$1" in
-                "7z") echo "7zip" ;;
-                "dig") echo "bind-utils" ;;
-                "sha256sum") echo "coreutils" ;;
-                "xdg-open") echo "xdg-utils" ;;
-                *) echo "$1" ;;
-            esac
-            ;;
-        *)
-            case "$1" in
-                "7z") echo "7zip" ;;
-                "dig") echo "dnsutils" ;;
-                "sha256sum") echo "coreutils" ;;
-                "xdg-open") echo "xdg-utils" ;;
-                *) echo "$1" ;;
-            esac
-            ;;
-    esac
+	case "$family" in
+	debian)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "dnsutils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "shadow" ;;
+		"tput") echo "ncurses-bin" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	arch)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "bind" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "util-linux" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	rhel)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "bind-utils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "util-linux-user" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	*)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "dnsutils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "shadow" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	esac
 }
 
 jsf_is_native_installed() {
