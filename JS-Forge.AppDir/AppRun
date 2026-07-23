@@ -226,11 +226,13 @@ variables() {
 	detected_hostname="$(detect_hostname)"
 	detected_lan_ip="$(detect_lan_ip)"
 	detected_init_system="$(detect_init_system)"
+	DISTRO_FAMILY="$(jsf_detect_distro_family)"
 
 	# =============================================================================
 	# EXPORT VARIABLES:
 	# =============================================================================
 
+	export DISTRO_FAMILY
 	export JSF_APP_NAME="JS-Forge"
 	export JSF_APP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$JSF_APP_NAME"
 	export JSF_RUNTIME_CORE_PATH="$JSF_APP_DATA_DIR/runtime-core.lib"
