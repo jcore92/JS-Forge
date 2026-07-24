@@ -166,7 +166,7 @@ Enabling the package manager bridge compatibility layer...
                 xprob_messages+=(" ✕ $prog is not installed")
                 text_delay
                 echo " ✕ $prog is not installed" | print_red | if [ "$tui_flag" = "1" ]; then cat; fi
-                missing+=("$(tool_to_pkg_name "$prog")")
+                missing+=("$(jsf_tool_to_pkg_name "$prog")")
             else
                 xprob_messages+=(" ✓ $prog is installed")
                 text_delay
