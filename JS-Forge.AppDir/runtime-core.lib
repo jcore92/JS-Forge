@@ -1,465 +1,353 @@
 #!/bin/bash
 
-
 jsf_runtime_core_loaded="1"
 
-
 jsf_init_runtime_core() {
-    app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
-    runtime_core_name="runtime-core.lib"
-    runtime_core_path="$app_data_dir/$runtime_core_name"
-    app_temp_loc="/tmp/$app_name"
+	app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
+	runtime_core_name="runtime-core.lib"
+	runtime_core_path="$app_data_dir/$runtime_core_name"
+	app_temp_loc="/tmp/$app_name"
 
+	mkdir -p "$app_data_dir"
+	mkdir -p "$app_temp_loc"
 
-    mkdir -p "$app_data_dir"
-    mkdir -p "$app_temp_loc"
-
-
-    resolve_extension_dirs
-    jsf_detect_privilege
-    jsf_detect_package_manager
-    DISTRO_FAMILY="$(jsf_detect_distro_family)"
+	resolve_extension_dirs
+	jsf_detect_privilege
+	jsf_detect_package_manager
 }
-
 
 resolve_extension_dirs() {
-    local script_dir
-    local user_ext_dir
-    declare -A seen_dirs=()
+	local script_dir
+	local user_ext_dir
+	declare -A seen_dirs=()
 
+	script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd)"
+	user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 
-    script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd)"
-    user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
+	extension_dirs=()
 
+	if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
+		local real_appdir
+		real_appdir="$(cd -- "$APPDIR" && pwd)"
+		if [ -z "${seen_dirs[$real_appdir]}" ]; then
+			extension_dirs+=("$real_appdir")
+			seen_dirs["$real_appdir"]="1"
+		fi
+	fi
 
-    extension_dirs=()
+	if [ -d "$script_dir" ]; then
+		local real_script_dir
+		real_script_dir="$(cd -- "$script_dir" && pwd)"
+		if [ -z "${seen_dirs[$real_script_dir]}" ]; then
+			extension_dirs+=("$real_script_dir")
+			seen_dirs["$real_script_dir"]="1"
+		fi
+	fi
 
-
-    if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
-        local real_appdir
-        real_appdir="$(cd -- "$APPDIR" && pwd)"
-        if [ -z "${seen_dirs[$real_appdir]}" ]; then
-            extension_dirs+=("$real_appdir")
-            seen_dirs["$real_appdir"]="1"
-        fi
-    fi
-
-
-    if [ -d "$script_dir" ]; then
-        local real_script_dir
-        real_script_dir="$(cd -- "$script_dir" && pwd)"
-        if [ -z "${seen_dirs[$real_script_dir]}" ]; then
-            extension_dirs+=("$real_script_dir")
-            seen_dirs["$real_script_dir"]="1"
-        fi
-    fi
-
-
-    if [ "$allow_user_extensions" = "1" ]; then
-        mkdir -p "$user_ext_dir"
-        local real_user_dir
-        real_user_dir="$(cd -- "$user_ext_dir" && pwd)"
-        if [ -z "${seen_dirs[$real_user_dir]}" ]; then
-            extension_dirs+=("$real_user_dir")
-            seen_dirs["$real_user_dir"]="1"
-        fi
-    fi
+	if [ "$allow_user_extensions" = "1" ]; then
+		mkdir -p "$user_ext_dir"
+		local real_user_dir
+		real_user_dir="$(cd -- "$user_ext_dir" && pwd)"
+		if [ -z "${seen_dirs[$real_user_dir]}" ]; then
+			extension_dirs+=("$real_user_dir")
+			seen_dirs["$real_user_dir"]="1"
+		fi
+	fi
 }
-
 
 jsf_detect_privilege() {
-    current_user="$(whoami)"
+	current_user="$(whoami)"
 
-
-    if ((EUID == 0)); then
-        sudocmd=""
-    elif command -v sudo >/dev/null 2>&1; then
-        sudocmd="sudo "
-    else
-        sudocmd=""
-    fi
+	if ((EUID == 0)); then
+		sudocmd=""
+	elif command -v sudo >/dev/null 2>&1; then
+		sudocmd="sudo "
+	else
+		sudocmd=""
+	fi
 }
-
 
 jsf_detect_package_manager() {
-    package_manager="$(
-        for cmd in apt dnf yum pacman zypper; do
-            command -v "$cmd" >/dev/null 2>&1 && echo "$cmd" && break
-        done
-    )"
+	package_manager="$(
+		for cmd in apt dnf yum pacman zypper; do
+			command -v "$cmd" >/dev/null 2>&1 && echo "$cmd" && break
+		done
+	)"
 
+	pkgmngr_install=""
+	pkgmngr_refresh=""
 
-    pkgmngr_install=""
-    pkgmngr_refresh=""
+	if [ "$package_manager" = "apt" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager update"
+	fi
 
+	if [ "$package_manager" = "dnf" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager makecache"
+	fi
 
-    if [ "$package_manager" = "apt" ]; then
-        pkgmngr_install="$sudocmd$package_manager install -y"
-        pkgmngr_refresh="$sudocmd$package_manager update"
-    fi
+	if [ "$package_manager" = "yum" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager check-update"
+	fi
 
+	if [ "$package_manager" = "pacman" ]; then
+		pkgmngr_install="$sudocmd$package_manager -Syu --noconfirm"
+		pkgmngr_refresh="sleep .1"
+	fi
 
-    if [ "$package_manager" = "dnf" ]; then
-        pkgmngr_install="$sudocmd$package_manager install -y"
-        pkgmngr_refresh="$sudocmd$package_manager makecache"
-    fi
-
-
-    if [ "$package_manager" = "yum" ]; then
-        pkgmngr_install="$sudocmd$package_manager install -y"
-        pkgmngr_refresh="$sudocmd$package_manager check-update"
-    fi
-
-
-    if [ "$package_manager" = "pacman" ]; then
-        pkgmngr_install="$sudocmd$package_manager -Syu --noconfirm"
-        pkgmngr_refresh="sleep .1"
-    fi
-
-
-    if [ "$package_manager" = "zypper" ]; then
-        pkgmngr_install="$sudocmd$package_manager install -y"
-        pkgmngr_refresh="$sudocmd$package_manager refresh"
-    fi
+	if [ "$package_manager" = "zypper" ]; then
+		pkgmngr_install="$sudocmd$package_manager install -y"
+		pkgmngr_refresh="$sudocmd$package_manager refresh"
+	fi
 }
-
 
 jsf_launch_terminal_command() {
-    local command_string="$1"
+	local command_string="$1"
 
+	if [ "$gui_flag" != "1" ]; then
+		bash -c "$command_string"
+		return $?
+	fi
 
-    if [ "$gui_flag" != "1" ]; then
-        bash -c "$command_string"
-        return $?
-    fi
+	if [ "$package_manager" = "apt" ] && command -v x-terminal-emulator >/dev/null 2>&1; then
+		x-terminal-emulator -e bash -c "$command_string"
+		return $?
+	fi
 
+	local terminals=(
+		"xfce4-terminal -x"
+		"konsole --execute"
+		"mate-terminal -x"
+		"kitty --execute"
+		"gnome-terminal --"
+		"lxterminal -e"
+		"tilix -e"
+		"alacritty --command"
+		"urxvt -e"
+		"terminator -e"
+		"deepin-terminal -e"
+		"wezterm start --"
+		"xterm -e"
+	)
 
-    if [ "$package_manager" = "apt" ] && command -v x-terminal-emulator >/dev/null 2>&1; then
-        x-terminal-emulator -e bash -c "$command_string"
-        return $?
-    fi
+	local term
+	local cmd
 
+	for term in "${terminals[@]}"; do
+		cmd=($term)
+		if command -v "${cmd[0]}" >/dev/null 2>&1; then
+			"${cmd[@]}" bash -c "$command_string"
+			return $?
+		fi
+	done
 
-    local terminals=(
-        "xfce4-terminal -x"
-        "konsole --execute"
-        "mate-terminal -x"
-        "kitty --execute"
-        "gnome-terminal --"
-        "lxterminal -e"
-        "tilix -e"
-        "alacritty --command"
-        "urxvt -e"
-        "terminator -e"
-        "deepin-terminal -e"
-        "wezterm start --"
-        "xterm -e"
-    )
+	if command -v zenity >/dev/null 2>&1; then
+		echo "No terminal emulator found. Please install xfce4-terminal, kitty, konsole, gnome-terminal, xterm, or use this program in TUI mode." |
+			zenity --info --title="$app_name: Notification" --text="$(cat)" $default_messagebox_gui_dimensions
+	else
+		echo "No terminal emulator found. Please use this program in TUI mode." >&2
+	fi
 
-
-    local term
-    local cmd
-
-
-    for term in "${terminals[@]}"; do
-        cmd=($term)
-        if command -v "${cmd[0]}" >/dev/null 2>&1; then
-            "${cmd[@]}" bash -c "$command_string"
-            return $?
-        fi
-    done
-
-
-    if command -v zenity >/dev/null 2>&1; then
-        echo "No terminal emulator found. Please install xfce4-terminal, kitty, konsole, gnome-terminal, xterm, or use this program in TUI mode." |
-            zenity --info --title="$app_name: Notification" --text="$(cat)" $default_messagebox_gui_dimensions
-    else
-        echo "No terminal emulator found. Please use this program in TUI mode." >&2
-    fi
-
-
-    return 1
+	return 1
 }
-
 
 jsf_launch_terminal_script() {
-    local full_path="$1"
-    jsf_launch_terminal_command "\"$full_path\"; echo; read -p 'Press enter to continue'"
+	local full_path="$1"
+	jsf_launch_terminal_command "\"$full_path\"; echo; read -p 'Press enter to continue'"
 }
-
 
 # =============================================================================
 # Dependency helpers
 # Native packages + Flatpaks
 # =============================================================================
 
-
 jsf_detect_distro_family() {
-    local distro_id=""
-    local distro_like=""
+	local distro_id=""
+	local distro_like=""
 
+	if [ -r /etc/os-release ]; then
+		distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+		distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+	fi
 
-    if [ -r /etc/os-release ]; then
-        distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-        distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-    fi
-
-
-    case "$distro_id" in
-    debian | ubuntu | devuan)
-        echo "debian"
-        ;;
-    arch | artix)
-        echo "arch"
-        ;;
-    fedora | rhel | centos | rocky | almalinux)
-        echo "rhel"
-        ;;
-    *)
-        case "$distro_like" in
-        *debian*) echo "debian" ;;
-        *arch*) echo "arch" ;;
-        *rhel* | *fedora*) echo "rhel" ;;
-        *) echo "generic" ;;
-        esac
-        ;;
-    esac
+	case "$distro_id" in
+	debian | ubuntu | devuan)
+		echo "debian"
+		;;
+	arch | artix)
+		echo "arch"
+		;;
+	fedora | rhel | centos | rocky | almalinux)
+		echo "rhel"
+		;;
+	*)
+		case "$distro_like" in
+		*debian*) echo "debian" ;;
+		*arch*) echo "arch" ;;
+		*rhel* | *fedora*) echo "rhel" ;;
+		*) echo "generic" ;;
+		esac
+		;;
+	esac
 }
-
 
 jsf_tool_to_pkg_name() {
-    local family="${DISTRO_FAMILY:-$(jsf_detect_distro_family)}"
+	local family="${DISTRO_FAMILY:-$(jsf_detect_distro_family)}"
 
-
-    case "$family" in
-    debian)
-        case "$1" in
-        "7z") echo "7zip" ;;
-        "dig") echo "dnsutils" ;;
-        "sha256sum") echo "coreutils" ;;
-        "xdg-open") echo "xdg-utils" ;;
-        "chsh") echo "shadow" ;;
-        "tput") echo "ncurses-bin" ;;
-        "fontconfig") echo "fontconfig" ;;
-        "emoji-font") echo "fonts-noto-color-emoji" ;;
-        *) echo "$1" ;;
-        esac
-        ;;
-    arch)
-        case "$1" in
-        "7z") echo "7zip" ;;
-        "dig") echo "bind" ;;
-        "sha256sum") echo "coreutils" ;;
-        "xdg-open") echo "xdg-utils" ;;
-        "chsh") echo "util-linux" ;;
-        "tput") echo "ncurses" ;;
-        "fontconfig") echo "fontconfig" ;;
-        "emoji-font") echo "noto-fonts-emoji" ;;
-        *) echo "$1" ;;
-        esac
-        ;;
-    rhel)
-        case "$1" in
-        "7z") echo "7zip" ;;
-        "dig") echo "bind-utils" ;;
-        "sha256sum") echo "coreutils" ;;
-        "xdg-open") echo "xdg-utils" ;;
-        "chsh") echo "util-linux-user" ;;
-        "tput") echo "ncurses" ;;
-        "fontconfig") echo "fontconfig" ;;
-        "emoji-font") echo "google-noto-emoji-color-fonts" ;;
-        *) echo "$1" ;;
-        esac
-        ;;
-    *)
-        case "$1" in
-        "7z") echo "7zip" ;;
-        "dig") echo "dnsutils" ;;
-        "sha256sum") echo "coreutils" ;;
-        "xdg-open") echo "xdg-utils" ;;
-        "chsh") echo "shadow" ;;
-        "tput") echo "ncurses" ;;
-        "fontconfig") echo "fontconfig" ;;
-        "emoji-font") echo "noto-color-emoji-fonts" ;;
-        *) echo "$1" ;;
-        esac
-        ;;
-    esac
+	case "$family" in
+	debian)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "dnsutils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "shadow" ;;
+		"tput") echo "ncurses-bin" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	arch)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "bind" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "util-linux" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	rhel)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "bind-utils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "util-linux-user" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	*)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "dnsutils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "shadow" ;;
+		"tput") echo "ncurses" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	esac
 }
-
-
-jsf_has_emoji_font() {
-    if command -v fc-match >/dev/null 2>&1; then
-        fc-match "Noto Color Emoji" | grep -iq "Noto.*Emoji"
-        return $?
-    fi
-
-
-    if command -v fc-list >/dev/null 2>&1; then
-        fc-list : family | grep -iq "Noto Color Emoji"
-        return $?
-    fi
-
-
-    return 1
-}
-
 
 jsf_is_native_installed() {
-    case "$1" in
-    "emoji-font")
-        jsf_has_emoji_font
-        ;;
-    *)
-        command -v "$1" >/dev/null 2>&1
-        ;;
-    esac
+	command -v "$1" >/dev/null 2>&1
 }
-
 
 jsf_is_flatpak_installed() {
-    local app_id="$1"
-    flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$app_id"
+	local app_id="$1"
+	flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$app_id"
 }
-
 
 jsf_ensure_flathub() {
-    if ! flatpak remotes --columns=name 2>/dev/null | grep -Fxq "flathub"; then
-        flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-    fi
+	if ! flatpak remotes --columns=name 2>/dev/null | grep -Fxq "flathub"; then
+		flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+	fi
 }
 
-
 jsf_install_native_packages() {
-    local missing=()
-    local dep
-    local need_fontconfig="0"
-    local install_line=""
+	local missing=()
+	local dep
 
+	for dep in "$@"; do
+		if ! jsf_is_native_installed "$dep"; then
+			missing+=("$(jsf_tool_to_pkg_name "$dep")")
+		fi
+	done
 
-    for dep in "$@"; do
-        if [ "$dep" = "emoji-font" ]; then
-            if ! command -v fc-match >/dev/null 2>&1 && ! command -v fc-list >/dev/null 2>&1; then
-                if ! command -v fc-cache >/dev/null 2>&1; then
-                    need_fontconfig="1"
-                fi
-            fi
-        fi
-    done
+	if [ ${#missing[@]} -eq 0 ]; then
+		return 0
+	fi
 
-
-    if [ "$need_fontconfig" = "1" ] && ! jsf_is_native_installed "fontconfig"; then
-        missing+=("$(jsf_tool_to_pkg_name "fontconfig")")
-    fi
-
-
-    for dep in "$@"; do
-        if ! jsf_is_native_installed "$dep"; then
-            missing+=("$(jsf_tool_to_pkg_name "$dep")")
-        fi
-    done
-
-
-    if [ ${#missing[@]} -eq 0 ]; then
-        return 0
-    fi
-
-
-    text_delay
-    echo "
+	text_delay
+	echo "
 Attempting to install package(s):
 '${missing[*]}'
 " | if [ "$gui_flag" = "1" ]; then
-        zenity --text-info --timeout=4 $default_mainmenu_gui_dimensions --title="$app_name: Dependency Installer" --ok-label="" --cancel-label=""
-    else
-        cat
-    fi
+		zenity --text-info --timeout=4 $default_mainmenu_gui_dimensions --title="$app_name: Dependency Installer" --ok-label="" --cancel-label=""
+	else
+		cat
+	fi
 
+	if [ "$gui_flag" = "1" ]; then
+		jsf_launch_terminal_command "printf ' 🔐 ' ; $pkgmngr_refresh ; $pkgmngr_install ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
+		endprog
+	else
+		printf " 🔐 "
+		$pkgmngr_refresh
+		$pkgmngr_install ${missing[*]}
+	fi
 
-    install_line="$pkgmngr_refresh ; $pkgmngr_install ${missing[*]}"
-
-
-    if printf '%s\n' "${missing[@]}" | grep -Eq 'fontconfig|emoji'; then
-        install_line="$install_line ; if command -v fc-cache >/dev/null 2>&1; then fc-cache -f; fi"
-    fi
-
-
-    if [ "$gui_flag" = "1" ]; then
-        jsf_launch_terminal_command "printf ' 🔐 ' ; $install_line ; echo \"\"; read -p \"Press enter to continue\";"
-        endprog
-    else
-        printf " 🔐 "
-        eval "$install_line"
-    fi
-
-
-    return 0
+	return 0
 }
-
 
 jsf_install_flatpaks() {
-    local missing=()
-    local app_id
+	local missing=()
+	local app_id
 
+	for app_id in "$@"; do
+		if ! jsf_is_flatpak_installed "$app_id"; then
+			missing+=("$app_id")
+		fi
+	done
 
-    for app_id in "$@"; do
-        if ! jsf_is_flatpak_installed "$app_id"; then
-            missing+=("$app_id")
-        fi
-    done
+	if [ ${#missing[@]} -eq 0 ]; then
+		return 0
+	fi
 
+	jsf_ensure_flathub
 
-    if [ ${#missing[@]} -eq 0 ]; then
-        return 0
-    fi
+	if [ "$gui_flag" = "1" ]; then
+		jsf_launch_terminal_command "flatpak install -y flathub ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
+		endprog
+	else
+		flatpak install -y flathub ${missing[*]}
+	fi
 
-
-    jsf_ensure_flathub
-
-
-    if [ "$gui_flag" = "1" ]; then
-        jsf_launch_terminal_command "flatpak install -y flathub ${missing[*]}; echo \"\"; read -p \"Press enter to continue\";"
-        endprog
-    else
-        flatpak install -y flathub ${missing[*]}
-    fi
-
-
-    return 0
+	return 0
 }
 
-
 jsf_require_all() {
-    local native_deps=()
-    local flatpak_deps=()
-    local mode=""
-    local arg
+	local native_deps=()
+	local flatpak_deps=()
+	local mode=""
+	local arg
 
+	for arg in "$@"; do
+		case "$arg" in
+		--native | --flatpak)
+			mode="$arg"
+			;;
+		*)
+			case "$mode" in
+			--native) native_deps+=("$arg") ;;
+			--flatpak) flatpak_deps+=("$arg") ;;
+			esac
+			;;
+		esac
+	done
 
-    for arg in "$@"; do
-        case "$arg" in
-        --native | --flatpak)
-            mode="$arg"
-            ;;
-        *)
-            case "$mode" in
-            --native) native_deps+=("$arg") ;;
-            --flatpak) flatpak_deps+=("$arg") ;;
-            esac
-            ;;
-        esac
-    done
+	if [ ${#native_deps[@]} -ne 0 ]; then
+		jsf_install_native_packages "${native_deps[@]}" || return 1
+	fi
 
+	if [ ${#flatpak_deps[@]} -ne 0 ]; then
+		jsf_install_flatpaks "${flatpak_deps[@]}" || return 1
+	fi
 
-    if [ ${#native_deps[@]} -ne 0 ]; then
-        jsf_install_native_packages "${native_deps[@]}" || return 1
-    fi
-
-
-    if [ ${#flatpak_deps[@]} -ne 0 ]; then
-        jsf_install_flatpaks "${flatpak_deps[@]}" || return 1
-    fi
-
-
-    return 0
+	return 0
 }
