@@ -289,14 +289,14 @@ jsf_tool_to_pkg_name() {
 
 
 jsf_has_emoji_font() {
-    if command -v fc-match >/dev/null 2>&1; then
-        fc-match "Noto Color Emoji" | grep -iq "Noto.*Emoji"
+    if command -v fc-list >/dev/null 2>&1; then
+        fc-list --format="%{family[0]}\n" 2>/dev/null | grep -Fxiq "Noto Color Emoji"
         return $?
     fi
 
 
-    if command -v fc-list >/dev/null 2>&1; then
-        fc-list : family | grep -iq "Noto Color Emoji"
+    if command -v fc-match >/dev/null 2>&1; then
+        [ "$(fc-match -f '%{family[0]}\n' 'Noto Color Emoji' 2>/dev/null | head -n 1)" = "Noto Color Emoji" ]
         return $?
     fi
 
@@ -309,6 +309,11 @@ jsf_is_native_installed() {
     case "$1" in
     "emoji-font")
         jsf_has_emoji_font
+        ;;
+    "fontconfig")
+        command -v fc-list >/dev/null 2>&1 || \
+        command -v fc-match >/dev/null 2>&1 || \
+        command -v fc-cache >/dev/null 2>&1
         ;;
     *)
         command -v "$1" >/dev/null 2>&1
@@ -333,24 +338,15 @@ jsf_ensure_flathub() {
 jsf_install_native_packages() {
     local missing=()
     local dep
-    local need_fontconfig="0"
     local install_line=""
 
 
     for dep in "$@"; do
-        if [ "$dep" = "emoji-font" ]; then
-            if ! command -v fc-match >/dev/null 2>&1 && ! command -v fc-list >/dev/null 2>&1; then
-                if ! command -v fc-cache >/dev/null 2>&1; then
-                    need_fontconfig="1"
-                fi
-            fi
+        if [ "$dep" = "emoji-font" ] && ! jsf_is_native_installed "fontconfig"; then
+            missing+=("$(jsf_tool_to_pkg_name "fontconfig")")
+            break
         fi
     done
-
-
-    if [ "$need_fontconfig" = "1" ] && ! jsf_is_native_installed "fontconfig"; then
-        missing+=("$(jsf_tool_to_pkg_name "fontconfig")")
-    fi
 
 
     for dep in "$@"; do
