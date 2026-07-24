@@ -98,10 +98,12 @@ sleep 1
 
 if [[ -n "$latest_appimage" ]]; then
     echo "Moving $(basename "$latest_appimage") to $builddir/"
+	sleep 3
     mv "$latest_appimage" "$builddir/"
 else
     echo "No generated AppImage found to move."
 fi
 
+echo "operation complete."
 # exec bash
 exit

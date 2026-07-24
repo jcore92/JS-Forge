@@ -13,7 +13,8 @@ WARNING:
 
 wayland is incomplete and broken by design (not a true x11 drop-in replacement). For a more complete Linux experience consider a complete x11/xLibre solution instead.
 
-***" | if [ "$gui_flag" = "1" ]; then
+***
+" | if [ "$gui_flag" = "1" ]; then
 		zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label="" --timeout=10
 	else
 		cat | print_red
