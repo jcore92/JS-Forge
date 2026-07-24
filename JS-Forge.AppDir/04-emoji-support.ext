@@ -138,6 +138,7 @@ Attempting to repair emoji font support:
 		endprog
 	else
 		divider
+		echo ""
 		echo "Attempting to repair emoji font support:" | center
 		echo "'${missing[*]}'" | center
 		echo ""
@@ -172,6 +173,7 @@ emoji_ext_register() {
 }
 
 echo "Loading emoji font extension..."
+echo ""
 
 if emoji_needs_repair; then
 	emoji_ext_register
