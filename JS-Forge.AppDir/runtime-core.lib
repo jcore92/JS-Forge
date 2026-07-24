@@ -205,6 +205,7 @@ jsf_tool_to_pkg_name() {
 		"xdg-open") echo "xdg-utils" ;;
 		"chsh") echo "shadow" ;;
 		"tput") echo "ncurses-bin" ;;
+		"whiptail") echo "whiptail" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -216,6 +217,7 @@ jsf_tool_to_pkg_name() {
 		"xdg-open") echo "xdg-utils" ;;
 		"chsh") echo "util-linux" ;;
 		"tput") echo "ncurses" ;;
+		"whiptail") echo "libnewt" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -227,6 +229,7 @@ jsf_tool_to_pkg_name() {
 		"xdg-open") echo "xdg-utils" ;;
 		"chsh") echo "util-linux-user" ;;
 		"tput") echo "ncurses" ;;
+		"whiptail") echo "newt" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -238,6 +241,7 @@ jsf_tool_to_pkg_name() {
 		"xdg-open") echo "xdg-utils" ;;
 		"chsh") echo "shadow" ;;
 		"tput") echo "ncurses" ;;
+		"whiptail") echo "whiptail" ;;
 		*) echo "$1" ;;
 		esac
 		;;

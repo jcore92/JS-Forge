@@ -79,19 +79,22 @@ Program cannot continue, exiting." | if [ "$gui_flag" = "1" ]; then
 
     if grep -qi "ubuntu" /etc/os-release; then
         xprob_messages+=("$prettyname")
-        xprob_messages+=("$detected_hostname - $detected_lan_ip")
+        xprob_messages+=("$detected_hostname")
+		xprob_messages+=("$detected_lan_ip")
         xprob_messages+=(" ✓ package manager: $package_manager")
         xprob_messages+=(" ✓ package manager bridge: disabled")
         xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
     elif grep -qi "debian" /etc/os-release; then
         xprob_messages+=("$prettyname")
-        xprob_messages+=("$detected_hostname - $detected_lan_ip")
+        xprob_messages+=("$detected_hostname")
+		xprob_messages+=("$detected_lan_ip")
         xprob_messages+=(" ✓ package manager: $package_manager")
         xprob_messages+=(" ✓ package manager bridge: disabled")
         xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
     else
         xprob_messages+=("$prettyname")
-        xprob_messages+=("$detected_hostname - $detected_lan_ip")
+        xprob_messages+=("$detected_hostname")
+		xprob_messages+=("$detected_lan_ip")
         xprob_messages+=(" ✓ package manager: $package_manager")
         xprob_messages+=(" ✓ package manager bridge: enabled")
         xprob_messages+=(" ✓ desktop environment: $detected_desktop_environment")
@@ -110,7 +113,10 @@ Enabling the package manager bridge compatibility layer...
     echo "$prettyname" | if [ "$tui_flag" = "1" ]; then cat; fi
 
     text_delay
-    echo "$detected_hostname - $detected_lan_ip" | if [ "$tui_flag" = "1" ]; then cat; fi
+    echo "$detected_hostname" | if [ "$tui_flag" = "1" ]; then cat; fi
+
+	text_delay
+    echo "$detected_lan_ip" | if [ "$tui_flag" = "1" ]; then cat; fi
 
     text_delay
     echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then cat; fi
@@ -152,7 +158,7 @@ Enabling the package manager bridge compatibility layer...
 
     check_programs() {
         declare -g missing=()
-        local programs=("flatpak" "zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open")
+        local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "whiptail" "flatpak")
         local prog
 
         for prog in "${programs[@]}"; do

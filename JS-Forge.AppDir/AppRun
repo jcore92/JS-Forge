@@ -1027,6 +1027,12 @@ if [ "$1" == "" ]; then
 	variables
 	bootstrap_runtime_core
 	jsf_init_runtime_core
+	
+	# No zenity installed warning message GUI
+	if [ "$gui_flag" = "1" ] && ! command -v zenity >/dev/null 2>&1; then
+    jsf_launch_terminal_command 'echo "Zenity is required for GUI mode. Please install zenity or run JS-Forge from a terminal."; echo; read -p "Press enter to close"'
+    exit 1
+	fi
 
 	eula_prompt
 

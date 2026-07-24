@@ -2,7 +2,7 @@
 
 #local detected_display_server="wayland"
 
-if [[ "$detected_display_server" == *wayland* ]]; then
+if [[ "$detected_display_server" == *wayland* || "$detected_display_server" == "XWayland / Wayland" ]]; then
 
 	text_delay
 	echo "
