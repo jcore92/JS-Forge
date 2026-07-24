@@ -152,7 +152,7 @@ Enabling the package manager bridge compatibility layer...
 
     check_programs() {
         declare -g missing=()
-        local programs=("flatpak" "zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open")
+        local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "emoji-font" "flatpak")
         local prog
 
         for prog in "${programs[@]}"; do
