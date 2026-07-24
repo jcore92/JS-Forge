@@ -324,7 +324,7 @@ gitengine_menu() {
 	while true; do
 		if [ "$tui_flag" = 1 ]; then
             clear
-            jcorestudios_banner
+            jsforge_banner
 			echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
             echo "GitEngine Options" | center
             divider
