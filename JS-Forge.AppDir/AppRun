@@ -697,62 +697,74 @@ THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMP
 }
 
 load_extensions() {
-	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
-	echo "Extensions" | center
-	divider
-	echo ""
-	echo "Loading extensions..."
-	echo ""
+    echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+    echo "Extensions" | center
+    divider
+    echo ""
+    echo "Loading extensions..."
+    echo ""
 
-	local extension_dirs=()
-	local ext_dir
-	local file
-	local extension_filename
-	local found_any="0"
-	local ext_report_lines=()
+    local ext_dir
+    local file
+    local extension_filename
+    local found_any="0"
+    local ext_report_lines=()
 
-	declare -A loaded_extension_names
+    declare -A loaded_extension_names
 
-	if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
-		extension_dirs+=("$APPDIR")
-	fi
+    # Use the extension_dirs prepared by runtime core
+    # If somehow empty, fall back to exec dir and/or app_script_folder_loc
+    if [ "${#extension_dirs[@]}" -eq 0 ]; then
+        extension_dirs=()
 
-	extension_dirs+=("$app_script_folder_loc")
+        if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
+            extension_dirs+=( "$APPDIR" )
+        fi
 
-	for ext_dir in "${extension_dirs[@]}"; do
-		[ -d "$ext_dir" ] || continue
+        if [ -n "$JSF_EXEC_DIR" ] && [ -d "$JSF_EXEC_DIR" ]; then
+            extension_dirs+=( "$JSF_EXEC_DIR" )
+        fi
 
-		shopt -s nullglob
-		for file in "$ext_dir"/*.ext; do
-			[ -f "$file" ] || continue
+        if [ "$allow_user_extensions" = "1" ]; then
+            extension_dirs+=( "$app_script_folder_loc" )
+        fi
+    fi
 
-			extension_filename="$(basename "$file")"
+    for ext_dir in "${extension_dirs[@]}"; do
+        [ -d "$ext_dir" ] || continue
 
-			if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
-				continue
-			fi
+        shopt -s nullglob
+        for file in "$ext_dir"/*.ext; do
+            [ -f "$file" ] || continue
 
-			echo "Loading $extension_filename extension."
-			echo ""
+            extension_filename="$(basename "$file")"
 
-			source "$file"
-			loaded_extension_names["$extension_filename"]="1"
-			ext_report_lines+=(" ✓ $extension_filename loaded")
-			found_any="1"
-		done
-		shopt -u nullglob
-	done
+            if [ -n "${loaded_extension_names[$extension_filename]}" ]; then
+                continue
+            fi
 
-	xprob_messages+=("")
-	xprob_messages+=("Extensions")
+            echo "Loading $extension_filename extension."
+            echo ""
 
-	if [ "$found_any" = "0" ]; then
-		xprob_messages+=(" ✕ no extensions found.")
-		echo "No .ext files found"
-		sleep 2
-	else
-		xprob_messages+=("${ext_report_lines[@]}")
-	fi
+            # shellcheck disable=SC1090
+            source "$file"
+            loaded_extension_names["$extension_filename"]="1"
+            ext_report_lines+=( " ✓ $extension_filename loaded" )
+            found_any="1"
+        done
+        shopt -u nullglob
+    done
+
+    xprob_messages+=( "" )
+    xprob_messages+=( "Extensions" )
+
+    if [ "$found_any" = "0" ]; then
+        xprob_messages+=( " ✕ no extensions found." )
+        echo "No .ext files found"
+        sleep 2
+    else
+        xprob_messages+=( "${ext_report_lines[@]}" )
+    fi
 }
 
 # =============================================================================
