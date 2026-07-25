@@ -17,42 +17,40 @@ jsf_init_runtime_core() {
 }
 
 resolve_extension_dirs() {
-	local script_dir
-	local user_ext_dir
-	declare -A seen_dirs=()
+    local exec_dir
+    local user_ext_dir
+    declare -A seen_dirs=()
 
-	script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd)"
-	user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
+    exec_dir="${JSF_EXEC_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd -P)}"
+    user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 
-	extension_dirs=()
+    extension_dirs=()
 
-	if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
-		local real_appdir
-		real_appdir="$(cd -- "$APPDIR" && pwd)"
-		if [ -z "${seen_dirs[$real_appdir]}" ]; then
-			extension_dirs+=("$real_appdir")
-			seen_dirs["$real_appdir"]="1"
-		fi
-	fi
+    if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
+        local real_appdir
+        real_appdir="$(cd -- "$APPDIR" && pwd -P)"
+        if [ -z "${seen_dirs[$real_appdir]}" ]; then
+            extension_dirs+=("$real_appdir")
+            seen_dirs["$real_appdir"]="1"
+        fi
+    elif [ -d "$exec_dir" ]; then
+        local real_exec_dir
+        real_exec_dir="$(cd -- "$exec_dir" && pwd -P)"
+        if [ -z "${seen_dirs[$real_exec_dir]}" ]; then
+            extension_dirs+=("$real_exec_dir")
+            seen_dirs["$real_exec_dir"]="1"
+        fi
+    fi
 
-	if [ -d "$script_dir" ]; then
-		local real_script_dir
-		real_script_dir="$(cd -- "$script_dir" && pwd)"
-		if [ -z "${seen_dirs[$real_script_dir]}" ]; then
-			extension_dirs+=("$real_script_dir")
-			seen_dirs["$real_script_dir"]="1"
-		fi
-	fi
-
-	if [ "$allow_user_extensions" = "1" ]; then
-		mkdir -p "$user_ext_dir"
-		local real_user_dir
-		real_user_dir="$(cd -- "$user_ext_dir" && pwd)"
-		if [ -z "${seen_dirs[$real_user_dir]}" ]; then
-			extension_dirs+=("$real_user_dir")
-			seen_dirs["$real_user_dir"]="1"
-		fi
-	fi
+    if [ "$allow_user_extensions" = "1" ]; then
+        mkdir -p "$user_ext_dir"
+        local real_user_dir
+        real_user_dir="$(cd -- "$user_ext_dir" && pwd -P)"
+        if [ -z "${seen_dirs[$real_user_dir]}" ]; then
+            extension_dirs+=("$real_user_dir")
+            seen_dirs["$real_user_dir"]="1"
+        fi
+    fi
 }
 
 jsf_detect_privilege() {

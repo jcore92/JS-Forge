@@ -9,6 +9,7 @@ bootstrap_runtime_core() {
 	local source_runtime=""
 
 	script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+	export JSF_EXEC_DIR="$script_dir"
 	app_name="JS-Forge"
 	app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 	runtime_core_name="runtime-core.lib"
