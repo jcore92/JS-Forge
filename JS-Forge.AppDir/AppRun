@@ -53,6 +53,7 @@ variables() {
 	app_ver_minor="1"
 	app_ver_build="0"
 	app_ver_stage="beta"
+	app_ver_build_date="built on 7/24/26"
 	probe_name="System"
 
 	allow_user_extensions="0"
@@ -548,19 +549,20 @@ credits() {
 	#region
 
 	creds1="$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage
-MIT License - Feel free to fork this"
+$app_ver_build_date
+MIT License"
 
 	creds2="Presented By:
 https://jcorestudios.com/
 https://github.com/jcore92"
 
 	creds3="Description:
-A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, lightweight environment probing, and extension loading, infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA."
+A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, extension loading, and lightweight environment probing; infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA."
 
 	creds4="Credits & Acknowledgements
-========================================
-jcore92 - Lead Programmer/Founder
-Perplexity - AI Code Advisor/Programmer
+==============================
+jcore92 - Director/Programmer/Founder
+Perplexity - AI Code Advisor/Lead Programmer
 Gemini - AI Code Monkey #2
 Leo - AI Code Monkey #1"
 

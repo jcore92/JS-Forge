@@ -146,7 +146,7 @@ Enabling the package manager bridge compatibility layer...
 
     check_programs() {
 		xprob_messages+=("")
-		xprob_messages+=("Packages & Flatpaks")
+		xprob_messages+=("Dependencies")
 
         declare -g missing=()
         local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "whiptail" "flatpak")
