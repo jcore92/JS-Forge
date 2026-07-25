@@ -109,7 +109,7 @@ pull_repositories() {
         [ -d "$repo_dir/.git" ] || continue
         found_any="1"
         echo "Updating $(basename "$repo_dir")..."
-        git -C "$repo_dir" pull
+        git -C "$repo_dir" fetch --all --prune && git -C "$repo_dir" pull --ff-only
     done
 
     if [ "$found_any" = "0" ]; then
