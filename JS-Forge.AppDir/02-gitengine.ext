@@ -262,15 +262,16 @@ case "$action" in
     clone)
         clone_repos_from_list "\$gitengine_repository_list" "\$app_script_folder_loc"
 
-        zenity --info \
-            --title="\$app_name: GitEngine Notice" \
-            --text="Repositories cloned.
+        {
+            zenity --info \
+                --title="\$app_name: GitEngine Notice" \
+                --text="Repositories cloned.
 
 Please use cloned repositories responsibly.
 Only run scripts from sources you trust, and
 review code before executing it." \
-            \$default_messagebox_gui_dimensions
-			>/dev/null 2>&1
+                \$default_messagebox_gui_dimensions
+        } >/dev/null 2>&1
         ;;
     pull)
         pull_repositories "\$app_script_folder_loc"
