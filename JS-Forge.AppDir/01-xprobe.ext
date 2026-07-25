@@ -218,14 +218,14 @@ Attempting to install package(s):
 
         if [ ${#missing_flatpaks[@]} -ne 0 ]; then
             if ! flatpak remotes --columns=name 2>/dev/null | grep -Fxq "flathub"; then
-                flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+                flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
             fi
 
             if [ "$gui_flag" = "1" ]; then
-                jsf_launch_terminal_command "flatpak install -y flathub ${missing_flatpaks[*]}; echo \"\"; read -p \"Press enter to continue\";"
+                jsf_launch_terminal_command "flatpak --user install -y flathub ${missing_flatpaks[*]}; echo \"\"; read -p \"Press enter to continue\";"
                 endprog
             else
-                flatpak install -y flathub ${missing_flatpaks[*]}
+                flatpak --user install -y flathub ${missing_flatpaks[*]}
                 endprog
             fi
 
