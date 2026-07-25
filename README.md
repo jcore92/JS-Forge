@@ -32,11 +32,11 @@ The attached files show a split between the main application entry point, the sh
 | `AppRun` | Main launcher, app metadata, UI mode detection, branding, EULA flow, extension loading, menu flow, and exported runtime path variables. |
 | `runtime-core.lib` | Shared helper library for terminal UI helpers, package-manager detection, dependency installation, extension-dir resolution, and terminal launching helpers. |
 | `01-xprobe.ext` | Environment and dependency report extension with dependency and Flatpak checks. |
-| `02-gitengine-2.ext` | Repository-list driven Git clone/pull/delete workflow for collecting script packs. |
-| `03-updates-3.ext` | GitHub release checker and update notifier. |
-| `04-emoji-support-4.ext` | Emoji/fontconfig repair helper for terminals. |
-| `05-systemd-warning-5.ext` | Example policy warning extension for systemd detection. |
-| `06-wayland-warning-6.ext` | Example policy warning extension for Wayland detection. |
+| `02-gitengine.ext` | Repository-list driven Git clone/pull/delete workflow for collecting script packs. |
+| `03-updates.ext` | GitHub release checker and update notifier. |
+| `04-emoji-support.ext` | Emoji/fontconfig repair helper for terminals. |
+| `05-systemd-warning.ext` | Example policy warning extension for systemd detection. |
+| `06-wayland-warning.ext` | Example policy warning extension for Wayland detection. |
 
 ## Runtime model
 
