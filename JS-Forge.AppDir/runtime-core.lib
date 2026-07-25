@@ -353,3 +353,4 @@ jsf_require_all() {
 
 	return 0
 }
+
