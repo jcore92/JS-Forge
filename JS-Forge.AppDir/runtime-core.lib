@@ -1,5 +1,133 @@
 #!/bin/bash
 
+# =============================================================================
+# Terminal Interface
+# =============================================================================
+
+center() {
+	local width
+	width="${COLUMNS:-$(tput cols)}"
+	while IFS= read -r line; do
+		# Strip color codes to get the actual text length
+		local stripped_line=$(echo "$line" | sed 's/\x1b\[[0-9;]*m//g')
+		local actual_length=${#stripped_line}
+
+		if ((actual_length == width)); then
+			printf '%s\n' "$line"
+			continue
+		fi
+
+		if ((actual_length > width)); then
+			while read -r subline; do
+				local stripped_subline=$(echo "$subline" | sed 's/\x1b\[[0-9;]*m//g')
+				local subline_length=${#stripped_subline}
+
+				if ((subline_length == width)); then
+					printf '%s\n' "$subline"
+					continue
+				fi
+				printf '%*s\n' $(((subline_length + width) / 2)) "$subline"
+			done < <(fold -w "$width" <<<"$line")
+			continue
+		fi
+
+		printf '%*s\n' $(((actual_length + width) / 2)) "$line"
+	done <"${1:-/dev/stdin}"
+}
+
+print_red() {
+	while IFS= read -r line; do
+		# Calculate the length of the original line
+		local original_length=${#line}
+		# Print the line in red, ensuring the length is preserved
+		printf "\033[31m%s\033[0m\n" "$line"
+	done
+}
+
+divider() {
+	echo ""
+	printf -- ".%.0s" $(seq $(tput cols))
+	echo ""
+}
+
+cursor_menu() {
+	local prompt="$1" outvar="$2" options=("${@:3}")
+	local cur=0 count=${#options[@]}
+	local esc=$(echo -en "\e")
+
+	printf "$prompt\n"
+	while true; do
+		local index=0
+		for o in "${options[@]}"; do
+			if [ $index -eq $cur ]; then
+				echo -e " >\e[7m$o\e[0m"
+			else
+				echo "  $o"
+			fi
+			((index++))
+		done
+
+		read -s -n3 key
+		case "$key" in
+		"$esc[A")
+			((cur--))
+			((cur < 0)) && cur=0
+			;;
+		"$esc[B")
+			((cur++))
+			((cur >= count)) && cur=$((count - 1))
+			;;
+		"") break ;;
+		esac
+		echo -en "\e[${count}A"
+	done
+
+	printf -v "$outvar" "${options[$cur]}"
+}
+
+text_delay() {
+
+	sleep .1
+
+}
+
+entertocontinue() {
+
+	entertocontinue=(
+		""
+		"Press enter to continue"
+	)
+
+	# Get the terminal width
+	term_width=$(tput cols)
+
+	# Function to center a line
+	center_line() {
+		local line="$1"
+		local line_length=${#line}
+		local padding=$(((term_width - line_length) / 2))
+		printf "%${padding}s%s%${padding}s\n" "" "$line" ""
+	}
+
+	# Center each line of the image
+	for line in "${entertocontinue[@]}"; do
+		center_line "$line"
+	done
+
+	read -p ""
+
+}
+
+endprog() {
+
+	exit
+
+}
+
+# =============================================================================
+# Runtime Logic
+# =============================================================================
+
 jsf_runtime_core_loaded="1"
 
 jsf_init_runtime_core() {
