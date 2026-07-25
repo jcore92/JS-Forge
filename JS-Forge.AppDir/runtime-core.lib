@@ -251,14 +251,14 @@ jsf_is_native_installed() {
 }
 
 jsf_is_flatpak_installed() {
-	local app_id="$1"
-	flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$app_id"
+    local app_id="$1"
+    flatpak list --user --app --columns=application 2>/dev/null | grep -Fxq "$app_id"
 }
 
 jsf_ensure_flathub() {
-	if ! flatpak remotes --columns=name 2>/dev/null | grep -Fxq "flathub"; then
-		flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-	fi
+    if ! flatpak remotes --user --columns=name 2>/dev/null | grep -Fxq "flathub"; then
+        flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+    fi
 }
 
 jsf_install_native_packages() {

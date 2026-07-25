@@ -204,7 +204,7 @@ Attempting to install package(s):
                 *) flatpak_name="$flatpak_app" ;;
             esac
 
-            if flatpak list --app --columns=application 2>/dev/null | grep -Fxq "$flatpak_app"; then
+            if flatpak list --user --app --columns=application 2>/dev/null | grep -Fxq "$flatpak_app"; then
                 xprob_messages+=(" ✓ $flatpak_name is installed")
                 text_delay
                 echo " ✓ $flatpak_name is installed" | if [ "$tui_flag" = "1" ]; then cat; fi
@@ -217,7 +217,7 @@ Attempting to install package(s):
         done
 
         if [ ${#missing_flatpaks[@]} -ne 0 ]; then
-            if ! flatpak remotes --columns=name 2>/dev/null | grep -Fxq "flathub"; then
+            if ! flatpak remotes --user --columns=name 2>/dev/null | grep -Fxq "flathub"; then
                 flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
             fi
 
