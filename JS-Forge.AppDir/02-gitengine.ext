@@ -1,0 +1,446 @@
+#!/bin/bash
+
+
+[ "${gitengine_ext_loaded:-0}" = "1" ] && return
+gitengine_ext_loaded="1"
+
+
+ext_key="gitengine_ext"
+ext_menu_order+=("$ext_key")
+ext_menu_labels["$ext_key"]="🌿 GitEngine Options"
+ext_menu_actions["$ext_key"]="gitengine_menu"
+
+
+gitengine_repository_list="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/gitengine-repositories.txt"
+
+
+gitengine_ensure_repo_list() {
+    if [ ! -f "$gitengine_repository_list" ]; then
+        mkdir -p "$(dirname "$gitengine_repository_list")"
+        printf '%s\n' \
+            "# $app_name GitEngine Repository List" \
+            "# Add one git repository URL per line." \
+            "# Lines starting with # are ignored." \
+            "# Blank lines are ignored." \
+            "#" \
+            "# Example:" \
+            "# https://github.com/owner/repository.git" \
+            "#" \
+            "# Starter repo(s):" \
+            "https://github.com/jcore92/JCS-Script-Vault.git" \
+            >"$gitengine_repository_list"
+    fi
+}
+
+
+gitengine_clone_warning() {
+    local msg="
+Repositories cloned.
+
+Please use cloned repositories responsibly.
+Only run scripts from sources you trust, and
+review code before executing it."
+
+    if [ "$gui_flag" = "1" ]; then
+        zenity --info \
+            --title="$app_name: GitEngine Notice" \
+            --text="$msg" \
+            $default_messagebox_gui_dimensions
+    else
+        echo "$msg" | center
+        divider
+        entertocontinue
+    fi
+}
+
+
+edit_gitengine_repository_list() {
+    gitengine_ensure_repo_list || return 1
+    nano "$gitengine_repository_list"
+}
+
+
+clone_repos_from_list() {
+    gitengine_ensure_repo_list || return 1
+
+    local repo_list_file="$1"
+    local target_dir="$2"
+    local line
+    local repo_name
+
+    [ -f "$repo_list_file" ] || {
+        echo "Repository list file not found: $repo_list_file"
+        return 1
+    }
+
+    mkdir -p "$target_dir" || return 1
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+
+        [ -z "$line" ] && continue
+        [[ "$line" == \#* ]] && continue
+
+        repo_name="$(basename "${line%.git}")"
+
+        if [ -d "$target_dir/$repo_name/.git" ]; then
+            echo "Skipping $repo_name (already exists)"
+            continue
+        fi
+
+        echo "Cloning $repo_name..."
+        git clone "$line" "$target_dir/$repo_name"
+    done <"$repo_list_file"
+}
+
+
+pull_repositories() {
+    local target_dir="$1"
+    local repo_dir
+    local found_any="0"
+
+    [ -d "$target_dir" ] || return 1
+    local prev_nullglob
+    prev_nullglob="$(shopt -p nullglob)"
+    shopt -s nullglob
+
+    for repo_dir in "$target_dir"/*; do
+        [ -d "$repo_dir/.git" ] || continue
+        found_any="1"
+        echo "Updating $(basename "$repo_dir")..."
+        git -C "$repo_dir" fetch --all --prune && git -C "$repo_dir" pull --ff-only
+    done
+
+    if [ "$found_any" = "0" ]; then
+        echo "No repositories found in $target_dir"
+    fi
+}
+
+
+delete_all_repositories() {
+    local target_dir="$1"
+    local repo_dir
+    local confirmation
+    local found_any="0"
+
+    echo "WARNING: This will delete all Git repositories in:"
+    echo "$target_dir"
+    echo ""
+    read -r -p "Type deleteall to continue: " confirmation
+
+    if [ "$confirmation" != "deleteall" ]; then
+        echo "Deletion cancelled."
+        return 1
+    fi
+
+    [ -d "$target_dir" ] || return 1
+    local prev_nullglob
+    prev_nullglob="$(shopt -p nullglob)"
+    shopt -s nullglob
+
+    for repo_dir in "$target_dir"/*; do
+        [ -d "$repo_dir/.git" ] || continue
+        found_any="1"
+        echo "Deleting $(basename "$repo_dir")..."
+        rm -rf -- "$repo_dir"
+    done
+
+    if [ "$found_any" = "0" ]; then
+        echo "No repositories found to delete."
+    fi
+}
+
+
+gitengine_write_temp_script() {
+    local action="$1"
+    local temp_script
+
+    gitengine_ensure_repo_list || return 1
+
+    mkdir -p "$app_temp_loc" || return 1
+    temp_script="$(mktemp -p "$app_temp_loc" gitengine.XXXXXX.sh)" || return 1
+
+    cat >"$temp_script" <<EOF
+#!/usr/bin/env bash
+
+trap 'rm -f -- "\$0"' EXIT
+
+app_name=$(printf '%q' "$app_name")
+default_messagebox_gui_dimensions=$(printf '%q' "$default_messagebox_gui_dimensions")
+gitengine_repository_list=$(printf '%q' "$gitengine_repository_list")
+app_script_folder_loc=$(printf '%q' "$app_script_folder_loc")
+
+clone_repos_from_list() {
+    local repo_list_file="\$1"
+    local target_dir="\$2"
+    local line
+    local repo_name
+
+    [ -f "\$repo_list_file" ] || {
+        echo "Repository list file not found: \$repo_list_file"
+        return 1
+    }
+
+    mkdir -p "\$target_dir" || return 1
+
+    while IFS= read -r line || [ -n "\$line" ]; do
+        line="\${line#"\${line%%[![:space:]]*}"}"
+        line="\${line%"\${line##*[![:space:]]}"}"
+
+        [ -z "\$line" ] && continue
+        [[ "\$line" == \#* ]] && continue
+
+        repo_name="\$(basename "\${line%.git}")"
+
+        if [ -d "\$target_dir/\$repo_name/.git" ]; then
+            echo "Skipping \$repo_name (already exists)"
+            continue
+        fi
+
+        echo "Cloning \$repo_name..."
+        git clone "\$line" "\$target_dir/\$repo_name"
+    done < "\$repo_list_file"
+}
+
+pull_repositories() {
+    local target_dir="\$1"
+    local repo_dir
+    local found_any="0"
+
+    [ -d "\$target_dir" ] || return 1
+    local prev_nullglob
+    prev_nullglob="\$(shopt -p nullglob)"
+    shopt -s nullglob
+
+    for repo_dir in "\$target_dir"/*; do
+        [ -d "\$repo_dir/.git" ] || continue
+        found_any="1"
+        echo "Updating \$(basename "\$repo_dir")..."
+        git -C "\$repo_dir" pull
+    done
+
+    if [ "\$found_any" = "0" ]; then
+        echo "No repositories found in \$target_dir"
+    fi
+}
+
+delete_all_repositories() {
+    local target_dir="\$1"
+    local repo_dir
+    local confirmation
+    local found_any="0"
+
+    echo "WARNING: This will delete all Git repositories in:"
+    echo "\$target_dir"
+    echo ""
+    read -r -p "Type deleteall to continue: " confirmation
+
+    if [ "\$confirmation" != "deleteall" ]; then
+        echo "Deletion cancelled."
+        return 1
+    fi
+
+    [ -d "\$target_dir" ] || return 1
+    local prev_nullglob
+    prev_nullglob="\$(shopt -p nullglob)"
+    shopt -s nullglob
+
+    for repo_dir in "\$target_dir"/*; do
+        [ -d "\$repo_dir/.git" ] || continue
+        found_any="1"
+        echo "Deleting \$(basename "\$repo_dir")..."
+        rm -rf -- "\$repo_dir"
+    done
+
+    if [ "\$found_any" = "0" ]; then
+        echo "No repositories found to delete."
+    fi
+}
+
+case "$action" in
+    clone)
+        clone_repos_from_list "\$gitengine_repository_list" "\$app_script_folder_loc"
+
+        {
+            zenity --info \
+                --title="\$app_name: GitEngine Notice" \
+                --text="Repositories cloned.
+
+Please use cloned repositories responsibly.
+Only run scripts from sources you trust, and
+review code before executing it." \
+                \$default_messagebox_gui_dimensions
+        } >/dev/null 2>&1
+        ;;
+    pull)
+        pull_repositories "\$app_script_folder_loc"
+        ;;
+    deleteall)
+        delete_all_repositories "\$app_script_folder_loc"
+        ;;
+    *)
+        echo "Unknown GitEngine action: $action"
+        exit 1
+        ;;
+esac
+
+echo ""
+read -p "Press enter to continue"
+EOF
+
+    chmod +x "$temp_script" || return 1
+    printf '%s\n' "$temp_script"
+}
+
+
+gitengine_write_editor_temp_script() {
+    local temp_script
+
+    gitengine_ensure_repo_list || return 1
+    mkdir -p "$app_temp_loc" || return 1
+
+    temp_script="$(mktemp -p "$app_temp_loc" gitengine-edit.XXXXXX.sh)" || return 1
+
+    cat >"$temp_script" <<EOF
+#!/usr/bin/env bash
+trap 'rm -f -- "\$0"' EXIT
+nano $(printf '%q' "$gitengine_repository_list")
+EOF
+
+    chmod +x "$temp_script" || return 1
+    printf '%s\n' "$temp_script"
+}
+
+
+launch_terminal_script() {
+    local script_path="$1"
+
+    if [ "$package_manager" = "apt" ]; then
+        x-terminal-emulator -e bash "$script_path"
+    else
+        local terminals=(
+            "xfce4-terminal -x"
+            "konsole --execute"
+            "mate-terminal -x"
+            "kitty --execute"
+            "gnome-terminal --"
+            "lxterminal -e"
+            "tilix -e"
+            "alacritty --command"
+            "urxvt -e"
+            "terminator -e"
+            "deepin-terminal -e"
+            "wezterm start --"
+            "xterm -e"
+        )
+
+        local terminal_launched=false
+        local term
+        local cmd
+
+        for term in "${terminals[@]}"; do
+            cmd=($term)
+            if command -v "${cmd[0]}" &>/dev/null; then
+                "${cmd[@]}" bash "$script_path"
+                terminal_launched=true
+                break
+            fi
+        done
+
+        if [[ "$terminal_launched" == false ]]; then
+            echo "No terminal emulator found. Please install xfce4-terminal, kitty, konsole, gnome-terminal, xterm, or another common terminal emulator, or use this program in TUI mode." |
+                zenity --info --title="$app_name: Notification" --text="$(cat)" $default_messagebox_gui_dimensions
+            rm -f -- "$script_path"
+        fi
+    fi
+}
+
+
+gitengine_run_and_pause() {
+    "$@"
+    divider
+    entertocontinue
+}
+
+
+gitengine_menu() {
+    local selection
+    local temp_script
+
+    while true; do
+        if [ "$tui_flag" = 1 ]; then
+            clear
+            jsforge_banner
+            echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+            echo "GitEngine Options" | center
+            divider
+            echo "Select a menu option:" | center
+        fi
+
+        if [ "$gui_flag" = "1" ]; then
+            selection=$(zenity --list \
+                --title="$app_name" \
+                --text="GitEngine Menu" \
+                --column="Options" \
+                "📝 Edit Repository List" \
+                "📥 Clone Repositories" \
+                "🔄 Update Repositories (Pull)" \
+                "🗑 Delete All Repositories" \
+                $default_mainmenu_gui_dimensions \
+                --ok-label="Select" \
+                --cancel-label="<- Back")
+            [ $? -ne 0 ] && return
+        else
+            cursor_menu " " selection \
+                "📝 Edit Repository List" \
+                "📥 Clone Repositories" \
+                "🔄 Update Repositories (Pull)" \
+                "🗑 Delete All Repositories" \
+                "<- Back"
+        fi
+
+        case "$selection" in
+        "📝 Edit Repository List")
+            if [ "$gui_flag" = "1" ]; then
+                temp_script="$(gitengine_write_editor_temp_script)" || return 1
+                launch_terminal_script "$temp_script"
+            else
+                echo ""
+                edit_gitengine_repository_list
+            fi
+            ;;
+        "📥 Clone Repositories")
+            if [ "$gui_flag" = "1" ]; then
+                temp_script="$(gitengine_write_temp_script clone)" || return 1
+                launch_terminal_script "$temp_script"
+            else
+                echo ""
+                clone_repos_from_list "$gitengine_repository_list" "$app_script_folder_loc"
+                gitengine_clone_warning
+            fi
+            ;;
+        "🔄 Update Repositories (Pull)")
+            if [ "$gui_flag" = "1" ]; then
+                temp_script="$(gitengine_write_temp_script pull)" || return 1
+                launch_terminal_script "$temp_script"
+            else
+                echo ""
+                gitengine_run_and_pause pull_repositories "$app_script_folder_loc"
+            fi
+            ;;
+        "🗑 Delete All Repositories")
+            if [ "$gui_flag" = "1" ]; then
+                temp_script="$(gitengine_write_temp_script deleteall)" || return 1
+                launch_terminal_script "$temp_script"
+            else
+                echo ""
+                gitengine_run_and_pause delete_all_repositories "$app_script_folder_loc"
+            fi
+            ;;
+        "<- Back")
+            return
+            ;;
+        esac
+    done
+}

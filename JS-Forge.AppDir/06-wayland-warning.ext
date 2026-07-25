@@ -1,10 +1,8 @@
 #!/bin/bash
 
-echo "Loading wayland extension..."
-
 #local detected_display_server="wayland"
 
-if [[ "$detected_display_server" == "wayland" ]]; then
+if [[ "$detected_display_server" == *wayland* || "$detected_display_server" == "XWayland / Wayland" ]]; then
 
 	text_delay
 	echo "
@@ -15,14 +13,15 @@ WARNING:
 
 wayland is incomplete and broken by design (not a true x11 drop-in replacement). For a more complete Linux experience consider a complete x11/xLibre solution instead.
 
-***" | if [ "$gui_flag" = "1" ]; then
+***
+" | if [ "$gui_flag" = "1" ]; then
 		zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label="" --timeout=10
 	else
 		cat | print_red
 		sleep 5
 	fi
 
-	#xprob_messages+=(" ✕ display server: wayland")
+	#xprobe_messages+=(" ✕ display server: wayland")
 else
 
 echo " ✓ system okay

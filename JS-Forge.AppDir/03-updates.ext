@@ -1,5 +1,8 @@
 #!/bin/bash
 
+[ "${updates_ext_loaded:-0}" = "1" ] && return
+updates_ext_loaded="1"
+
 updates_repo_path="jcore92/JS-Forge"
 
 updates_repo_url="https://github.com/$updates_repo_path"
@@ -15,7 +18,7 @@ updates_sleep_seconds="3"
 
 updates_ext_register() {
     local ext_key
-    ext_key="02_updates_ext"
+    ext_key="updates_ext"
 
     ext_menu_order+=("$ext_key")
     ext_menu_labels["$ext_key"]="🔔 Check for Updates"
@@ -185,9 +188,6 @@ updates_ext_startup_check() {
 
 # If your GitHub releases will use tags like v2.0.0, this code already strips the leading v before comparing versions. That should match your current app version variables cleanly.
 
-echo "Loading updates extension..."
 updates_ext_register
-echo " ✓ loaded extension"
-echo ""
 
 updates_ext_startup_check

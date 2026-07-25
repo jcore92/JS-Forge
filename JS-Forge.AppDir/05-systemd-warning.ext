@@ -1,7 +1,5 @@
 #!/bin/bash
 
-echo "Loading systemd extension..."
-
 if [[ -d /run/systemd/system ]]; then
 
 	text_delay
@@ -15,14 +13,15 @@ WARNING:
 
 Due to the size of this code base systemd is considered a massive attack surface & inefficient code compared to other Linux init systems. To improve security, we recommend switching to a distro without systemd.
 
-***" | if [ "$gui_flag" = "1" ]; then
+***
+" | if [ "$gui_flag" = "1" ]; then
 		zenity --text-info $default_mainmenu_gui_dimensions --title="$app_name: $probe_name Report" --cancel-label="" --timeout=10
 	else
 		cat | print_red
 		sleep 5
 	fi
 
-	#xprob_messages+=(" ✕ systemd: detected")
+	#xprobe_messages+=(" ✕ systemd: detected")
 else
 
 echo " ✓ system okay

@@ -1,127 +1,188 @@
 # JS-Forge
 
-JS-Forge is a Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, lightweight environment probing, and extension loading. The main script is designed to detect the current session type, validate the host environment, load compatible extensions, and present a navigable menu for running compatible scripts.
+JS-Forge is a Bash application framework and launcher for Linux that blends a terminal UI, optional Zenity dialogs, environment probing, extension loading, and dependency/bootstrap helpers into one portable runtime.
 
-## Overview
+It is designed for two kinds of people: users who just want to run curated scripts, and tinkerers who want a starting point for building their own Bash tools without rewriting the same setup code every time.
 
-The main script identifies itself as `JS-Forge.sh`, uses `JS-Forge` as the application name, and currently reports version `1.0.0 beta`. It is authored by JCore Studios & jcore92 and includes built-in branding, startup checks, menu rendering, and runtime utilities.
+## What it does
 
-JS-Forge is structured to work as a portable Bash application rather than a traditional packaged desktop program. Its core responsibilities are environment detection, dependency checks, menu generation, extension discovery, and script execution.
+JS-Forge provides a branded shell application shell with a startup pipeline, dependency helpers, extension menus, and a script browser rooted in the user's script folder.
 
-## Core behavior
+At launch, the app initializes its variables, detects whether it is in TUI or GUI mode, gathers system details, can show a version-gated MIT license prompt, runs the environment probe, loads `.ext` extensions, and then opens its main browser/menu flow.
 
-At startup, the script determines whether it is running in terminal mode or GUI mode by checking whether standard input is attached to a terminal, then sets `tui_flag` or `gui_flag` accordingly. It stores key runtime locations such as a temp directory under `/tmp/JS-Forge` and a script root at `~/.JS-Forge`.
+## Core features
 
-The `variables()` function acts as the central initializer for application metadata, runtime flags, locations, extension menu arrays, package-manager helpers, and GUI sizing presets. This function is the foundation of the application lifecycle and is loaded before the main runtime path proceeds.
+- Hybrid interface: the project can run as a terminal-first application or switch to Zenity-backed dialogs when launched outside a terminal.
+- Portable runtime core: `AppRun` copies `runtime-core.lib` into `${XDG_DATA_HOME:-$HOME/.local/share}/JS-Forge/` and exports `JSF_RUNTIME_CORE_PATH` so scripts can source the same helper library consistently.
+- Dependency bootstrap: the runtime detects `apt`, `dnf`, `yum`, `pacman`, or `zypper`, builds install/refresh commands, and exposes `jsf_require_all` for native packages and Flatpaks.
+- Extension loading: `.ext` files are discovered from portable, AppImage, and optional user paths and can register their own menu entries and actions.
+- Environment reporting: xProbe records OS, host, LAN IP, package-manager status, desktop environment, display server, init system, dependencies, and Flatpak state in a viewable report.
+- Script launching helpers: the runtime can open terminal commands or temporary helper scripts in common terminal emulators, which is especially useful for GUI mode workflows that still need a shell session.
+- Git-backed script intake: GitEngine can maintain a repository list, clone repositories into the script folder, pull updates, and delete cloned repos in bulk.
+- Update checks: the updates extension can query the latest GitHub release, compare versions, and notify the user automatically or manually.
+- Emoji/font repair path: the emoji extension can detect missing fontconfig or emoji fonts, install packages, refresh the font cache, and write a fallback fontconfig file for terminal emoji rendering.
+- Optional diagnostic opinion modules: the attached Wayland and systemd warning extensions show how JS-Forge can be extended with custom policy or opinionated environment checks.
 
-## Main functions
+## Project layout
 
-### `variables()`
+The attached files show a split between the main application entry point, the shared runtime, and optional extensions.
 
-Initializes app identity, version values, mode flags, extension arrays, filesystem locations, package-manager bridge variables, and GUI defaults. It also contains helper routines for resolving extension directories and desktop-session context.
+| File | Purpose |
+|---|---|
+| `AppRun` | Main launcher, app metadata, UI mode detection, branding, EULA flow, extension loading, menu flow, and exported runtime path variables. |
+| `runtime-core.lib` | Shared helper library for terminal UI helpers, package-manager detection, dependency installation, extension-dir resolution, and terminal launching helpers. |
+| `01-xprobe.ext` | Environment and dependency report extension with dependency and Flatpak checks. |
+| `02-gitengine.ext` | Repository-list driven Git clone/pull/delete workflow for collecting script packs. |
+| `03-updates.ext` | GitHub release checker and update notifier. |
+| `04-emoji-support.ext` | Emoji/fontconfig repair helper for terminals. |
+| `05-systemd-warning.ext` | Example policy warning extension for systemd detection. |
+| `06-wayland-warning.ext` | Example policy warning extension for Wayland detection. |
 
-### `resolve_extension_dirs()`
+## Runtime model
 
-Builds the list of extension search paths from the current script directory, the user extension path under `~/.local/share/JS-Forge/Extensions`, and an AppImage-aware path under `$APPDIR/usr/share/JS-Forge/Extensions` when available. This allows JS-Forge to support portable, user, and AppImage-backed extension locations.
+The runtime core is the part most worth understanding if the goal is to fork JS-Forge or build on top of it.
 
-### `detect_display_server()` and `detect_desktop_environment()`
+`jsf_init_runtime_core` prepares the application data directory, temp directory, extension search paths, privilege model, and package-manager helpers so later code can stay focused on the actual tool being built instead of bootstrap plumbing.
 
-These functions inspect the running Linux session and report values such as Wayland, X11, XWayland / Wayland, XLibre, or headless/SSH-oriented states. The desktop-environment detector checks common environment variables and falls back to process inspection and `xprop` when needed.
+`jsf_require_all` then gives scripts a compact interface for ensuring both native packages and Flatpaks are present before continuing.
 
-### `center()`, `print_red()`, `divider()`, `cursor_menu()`, and `text_delay()`
+### Minimal script bootstrap
 
-These functions provide the main TUI presentation layer. They handle centered text output, red-colored warning output, full-width separators, keyboard-driven cursor menus, and paced terminal output for a more polished command-line experience.
-
-### Banner functions
-
-`jcorestudios_banner()`, `jcore92_banner()`, and `JS-Forge_banner()` render the built-in ASCII/Unicode title art shown during startup and scene transitions. These functions are used throughout the TUI flow to reinforce branding and improve presentation.
-
-### `entertocontinue()` and `endprog()`
-
-These functions provide simple flow control for pausing and exiting. `entertocontinue()` renders a centered prompt and waits for input, while `endprog()` exits the script.
-
-### `credits()`
-
-Displays the application credits and About information in either Zenity or terminal form depending on the active mode. It includes version information, licensing text, project presentation links, and author credits.
-
-### `eula_prompt()`
-
-Shows the MIT License text to the user at startup using `less` in TUI mode or `zenity --text-info` in GUI mode. In the current script, it acts as the startup legal/notice gate before the rest of the application continues.
-
-### `xprobe()`
-
-`xProbe` is the environment analysis and dependency-validation routine. It checks for unsupported conditions such as raw TTY sessions, WSL, and unsupported package managers, reports OS and display information, validates required tools, and can attempt package installation through package-manager-specific helper commands.
-
-### `load_extensions()`
-
-Searches resolved extension directories for `.ext` files, sources them, and records successful loads in the `xprob_messages` report buffer. If no extensions are found, the script reports that condition and continues accordingly.
-
-### `is_runnable_script()`, `run_selected_script()`, `view_script_source()`, and `browse_menu()`
-
-These functions implement the runtime browsing and execution model. They identify compatible scripts, run selected files, allow source viewing through `nano`, and drive the nested main menu that mixes directories, runnable scripts, built-in actions, and extension menu entries.
-
-## Runtime flow
-
-When launched normally with no startup switch, the script initializes variables, shows the MIT license prompt, runs `xProbe`, loads extensions, and then enters the main browser menu rooted at `app_script_folder_loc`. In GUI mode, progress feedback is shown through Zenity; in TUI mode, the flow is rendered directly in the terminal with banners, centered text, and cursor-based menu navigation.
-
-The browser menu can expose subdirectories, runnable scripts, About information, the xProbe report, and any extension-provided entries that were added to the extension menu arrays. The script then exits through the credits scene and final cleanup flow when the user chooses to leave the application.
-
-## Startup switches
-
-The script includes a `-s` switch that loads the runtime environment and presents a lightweight script-runtime scene, which is useful when the file is sourced or invoked for environment setup behavior. It also contains a `-t` testing/install-oriented path intended for installation runtime checks, though that path is clearly still marked as not ready in the current version.
-
-## Dependency model
-
-JS-Forge detects a supported package manager from `apt`, `dnf`, `yum`, `pacman`, or `zypper` and builds helper commands such as `pkgmngr_install` and `pkgmngr_refresh` from that result. The dependency check inside `xprobe()` currently validates tools including `flatpak`, `zenity`, `nano`, `git`, `jq`, `tput`, `chsh`, and `xdg-open`.
-
-For Debian and Ubuntu-derived systems, the script treats the package-manager bridge as disabled because `apt` is already available; for other supported package-manager families, it reports that the bridge is enabled. Missing dependencies can trigger an interactive install path depending on the current mode and available terminal environment.
-
-## Extension support
-
-JS-Forge supports dynamically sourced `.ext` files and maintains extension menu labels, actions, and order through global arrays declared during initialization. In the current intended release direction, the updater extension is the primary extension expected to be documented and shipped alongside the main script.
-
-The extension loader supports three search patterns: portable extensions beside the script, user extensions in `~/.local/share/JS-Forge/Extensions`, and AppImage-bundled extensions when `APPDIR` is present. This makes the script adaptable to multiple distribution models without hardwiring a single install path.
-
-## Interface design
-
-The TUI emphasizes centered banners, cursor-driven menus, explicit separators, and readable diagnostics. The GUI path uses Zenity for selection windows, progress dialogs, text viewers, and notifications, allowing the same main script to behave like a lightweight desktop tool when launched outside a terminal.
-
-This dual-mode approach is one of the defining characteristics of the project. JS-Forge is not just a script runner; it is a Bash-driven shell application framework with its own startup pipeline, validation layer, and navigation model.
-
-## Current scope
-
-At its current version, JS-Forge is best understood as an open Bash framework for launching and organizing compatible scripts with built-in environment checks, optional extension support, and a branded interactive shell experience. Its main script already handles much of the hard infrastructure work: probing the system, preparing the runtime, loading extensions, and presenting the action menu.
-
-## Suggested repository contents
-
-A practical GitHub repository layout for the current project would include:
-
-- `JS-Forge.sh` as the main entry point.
-- A `LICENSE` file containing the MIT License text referenced by the script’s EULA prompt.
-- This README to explain the runtime model, features, and function layout.
-- The updater extension as the documented extension shipped with the main project direction.
-
-## Usage
-
-Example local execution:
+This pattern is the big quality-of-life win for people building with a fork:
 
 ```bash
-chmod +x JS-Forge.sh
-./JS-Forge.sh
+#!/bin/bash
+
+source "$JSF_RUNTIME_CORE_PATH" || {
+    echo "Fatal: failed to source JS-Forge runtime." >&2
+    exit 1
+}
+
+jsf_init_runtime_core
+
+jsf_require_all \
+  --native flatpak zenity curl \
+  --flatpak it.mijorus.gearlever
 ```
 
-Example runtime-environment switch:
+That small block gives a script a shared dependency model, package-manager abstraction, privilege awareness, extension-dir awareness, temporary workspace setup, and terminal-launch helpers without having to copy all of that into each new script.
+
+In practice, this means a fork can focus on the real feature immediately: media tools, system helpers, installers, repair utilities, repo launchers, or guided desktop actions.
+
+## Why this makes Bash scripting easier
+
+A lot of Bash projects stall out because every script has to re-solve the same boring infrastructure problems: where to store data, how to detect the distro, how to install dependencies, how to ask for elevation, how to launch a terminal from a GUI session, and how to stay usable across different Linux setups.
+
+JS-Forge already centralizes those problems. Instead of writing a one-off installer in every project, a fork can use the runtime library as a shared foundation and keep feature scripts much shorter and more readable.
+
+That is especially helpful when building script packs with multiple entry points. One runtime can back many small tools, and those tools can all inherit the same UX rules and dependency behavior.
+
+## Extension system
+
+Extensions are regular `.ext` Bash files that get sourced at startup from the resolved extension directories.
+
+An extension can register menu keys, labels, and callbacks by writing into the global extension arrays, which lets the main app expose extra actions without hardcoding them into the central menu logic.
+
+This is the main hook for community involvement. A contributor does not need to rewrite the launcher; they can ship one focused extension that adds a workflow, report, fix, or integration.
+
+## Included extension examples
+
+### xProbe
+
+xProbe is the environment audit layer. It checks for unsupported cases such as raw TTY launches, WSL, and unsupported package managers, then records system and dependency information into a report the user can open later.
+
+It also demonstrates auto-remediation patterns by installing missing native tools and required Flatpaks when needed.
+
+### GitEngine
+
+GitEngine turns JS-Forge into a script-vault intake tool. It maintains a repository list file, clones listed repositories into the script folder, updates them with `git pull`, and can bulk-delete them when needed.
+
+That makes it useful for teams or personal script collections where the launcher is meant to curate many small repos instead of one monolithic codebase.
+
+### Updates
+
+The updates extension queries the latest GitHub release from the configured repository, strips a leading `v` from tags, compares versions, and can notify automatically on an interval or manually from the menu.
+
+This is a clean example of how to bolt network-aware maintenance features onto the main app without bloating the core launcher.
+
+### Emoji support
+
+The emoji extension shows a more repair-oriented use case. It can detect missing `fontconfig` support or missing `Noto Color Emoji`, install what is needed, refresh caches, and write a fallback config so terminals can render emoji more reliably.
+
+It is also a good example of an extension that exists to improve presentation quality rather than add a whole new menu-driven app area.
+
+## Forking and customizing
+
+A fork can go in several directions without throwing away the existing structure.
+
+- Rebrand the app metadata in `AppRun`, including app name, versioning, command name, and credits text.
+- Swap the default dependency list and Flatpak requirements in xProbe to match the fork's actual toolchain.
+- Keep the runtime core stable and build most new behavior as `.ext` files so the launcher stays simpler to maintain.
+- Turn on user extensions with `allow_user_extensions="1"` if the fork should support per-user plug-ins from the data directory.
+- Replace the repository seed list used by GitEngine with the fork's own curated script vault.
+- Retune or remove opinionated warnings if the fork should be more neutral about init systems or display servers.
+
+A good rule of thumb is to treat `runtime-core.lib` as shared infrastructure, `AppRun` as the branded shell and top-level experience, and `.ext` files as feature modules.
+
+## Building new scripts with the runtime
+
+A simple workflow for contributors looks like this:
+
+1. Start a new Bash script and source `"$JSF_RUNTIME_CORE_PATH"`.
+2. Call `jsf_init_runtime_core` to prepare paths, extension discovery, privilege state, and package-manager helpers.
+3. Call `jsf_require_all` with any native packages and Flatpaks the script needs before doing real work.
+4. Use the runtime's UI helpers such as `center`, `divider`, `print_red`, `text_delay`, and terminal-launch helpers to keep the script consistent with the rest of the project.
+5. If the script should appear in the JS-Forge UI, package it or wrap it as a runnable script or extension inside the discovered script/extension locations.
+
+## What contributors can build
+
+Because the runtime already solves environment checks and installation flows, contributors can spend their time on actual tools.
+
+Examples include:
+
+- guided repair tools
+- repo-based script installers
+- package/Flatpak bootstrap tools
+- menu-driven desktop utilities
+- diagnostics and compatibility reports
+- wrappers around existing command-line tools
+- opinionated Linux onboarding kits
+
+## Current Linux assumptions
+
+The current code is Linux-focused and explicitly rejects unsupported raw TTY launches and WSL sessions in xProbe.
+
+It expects a supported package manager family, and many workflows assume a desktop-oriented Linux environment where Zenity, terminal emulators, Flatpak, and common command-line tools are reasonable dependencies.
+
+## Suggested repository shape
+
+A practical repository for this project or a fork would include at minimum the launcher, runtime library, documented extensions, license, and a stronger README.
+
+```text
+JS-Forge/
+├── AppRun
+├── runtime-core.lib
+├── 01-xprobe.ext
+├── 02-gitengine.ext
+├── 03-updates.ext
+├── 04-emoji-support.ext
+├── LICENSE
+└── README.md
+```
+
+## Getting started
+
+Example local launch:
 
 ```bash
-./JS-Forge.sh -s
+chmod +x AppRun
+./AppRun
 ```
 
-Example testing/install path:
+If the runtime library has been bootstrapped into the data directory by `AppRun`, standalone scripts can source `"$JSF_RUNTIME_CORE_PATH"` and reuse the same helper layer directly.
 
-```bash
-./JS-Forge.sh -t
-```
+## Philosophy
 
-## Notes
+JS-Forge is most useful when treated less like a single script and more like a Bash toolbox platform.
 
-The script is Linux-oriented and explicitly rejects unsupported raw TTY launches and WSL execution in the current implementation. It also depends on external utilities and terminal/desktop behavior that make it best suited to standard Linux desktop environments with common command-line tools installed.
+The launcher, runtime core, and extensions together form a lightweight framework for shipping interactive Linux utilities quickly, while still leaving enough room for a fork to become its own thing.

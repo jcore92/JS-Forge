@@ -1,0 +1,185 @@
+#!/bin/bash
+
+emoji_ext_key="06_emoji_font_ext"
+
+emoji_write_terminal_fallback_config() {
+	local fontconfig_dir
+	local emoji_conf
+	local backup_file
+
+	fontconfig_dir="${XDG_CONFIG_HOME:-$HOME/.config}/fontconfig/conf.d"
+	emoji_conf="$fontconfig_dir/99-emoji.conf"
+	backup_file="${emoji_conf}.$(date +%Y%m%d-%H%M%S).bak"
+
+	mkdir -p "$fontconfig_dir" || return 1
+
+	if [ -f "$emoji_conf" ]; then
+		cp -f "$emoji_conf" "$backup_file" || return 1
+	fi
+
+	cat >"$emoji_conf" <<'EOF'
+<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <alias>
+    <family>monospace</family>
+    <prefer>
+      <family>Noto Color Emoji</family>
+    </prefer>
+  </alias>
+</fontconfig>
+EOF
+
+	return 0
+}
+
+emoji_font_family_present() {
+	command -v fc-list >/dev/null 2>&1 || return 1
+	fc-list --format="%{family[0]}\n" 2>/dev/null | grep -Fxiq "Noto Color Emoji"
+}
+
+emoji_fontconfig_present() {
+	command -v fc-list >/dev/null 2>&1 ||
+		command -v fc-match >/dev/null 2>&1 ||
+		command -v fc-cache >/dev/null 2>&1
+}
+
+emoji_tool_to_pkg_name() {
+	case "$package_manager" in
+	apt) echo "$1" ;;
+	dnf) echo "$1" ;;
+	yum) echo "$1" ;;
+	pacman) echo "$1" ;;
+	zypper) echo "$1" ;;
+	*) echo "$1" ;;
+	esac
+}
+
+emoji_font_pkg_name() {
+	case "$package_manager" in
+	apt) echo "fonts-noto-color-emoji" ;;
+	pacman) echo "noto-fonts-emoji" ;;
+	dnf | yum) echo "google-noto-emoji-color-fonts" ;;
+	zypper) echo "google-noto-coloremoji-fonts" ;;
+	*) echo "fonts-noto-color-emoji" ;;
+	esac
+}
+
+emoji_fontconfig_pkg_name() {
+	echo "fontconfig"
+}
+
+emoji_needs_repair() {
+	if ! emoji_fontconfig_present; then
+		return 0
+	fi
+
+	if ! emoji_font_family_present; then
+		return 0
+	fi
+
+	return 1
+}
+
+emoji_repair_run() {
+	local missing=()
+	local emoji_pkg
+	local fontconfig_pkg
+	local install_cmd=""
+
+	emoji_pkg="$(emoji_font_pkg_name)"
+	fontconfig_pkg="$(emoji_fontconfig_pkg_name)"
+
+	if ! emoji_fontconfig_present; then
+		missing+=("$fontconfig_pkg")
+	fi
+
+	if ! emoji_font_family_present; then
+		missing+=("$emoji_pkg")
+	fi
+
+	if [ ${#missing[@]} -eq 0 ]; then
+		if command -v fc-cache >/dev/null 2>&1; then
+			if [ "$gui_flag" = "1" ]; then
+				jsf_launch_terminal_command "fc-cache -f; echo \"\"; read -p \"Press enter to continue\";"
+				endprog
+			else
+				fc-cache -f
+				divider
+				echo "Emoji font already appears installed. Refreshed font cache." | center
+				entertocontinue
+			fi
+		else
+			if [ "$gui_flag" = "1" ]; then
+				zenity --info \
+					--title="$app_name: Emoji Font" \
+					--text="Emoji font already appears installed." \
+					$default_messagebox_gui_dimensions
+			else
+				divider
+				echo "Emoji font already appears installed." | center
+				entertocontinue
+			fi
+		fi
+		return 0
+	fi
+
+	if [ "$gui_flag" = "1" ]; then
+		echo "
+Attempting to repair emoji font support:
+'${missing[*]}'
+" | zenity --text-info --timeout=4 \
+			--title="$app_name: Emoji Font Repair" \
+			$default_mainmenu_gui_dimensions \
+			--ok-label="" --cancel-label=""
+
+		install_cmd="$pkgmngr_refresh ; $pkgmngr_install ${missing[*]} ; if command -v fc-cache >/dev/null 2>&1; then fc-cache -f; fi ; echo \"\"; read -p \"Press enter to continue\";"
+		jsf_launch_terminal_command "$install_cmd"
+		endprog
+	else
+		divider
+		echo ""
+		echo "Attempting to repair emoji font support:" | center
+		echo "'${missing[*]}'" | center
+		echo ""
+		printf " 🔐 "
+		$pkgmngr_refresh
+		$pkgmngr_install ${missing[*]}
+		if command -v fc-cache >/dev/null 2>&1; then
+			fc-cache -f
+		fi
+
+		if emoji_write_terminal_fallback_config; then
+			if command -v fc-cache >/dev/null 2>&1; then
+				fc-cache -f
+			fi
+		fi
+
+		echo "Emoji terminal fallback applied. Restart your terminal to see changes."
+
+		divider
+		entertocontinue
+	fi
+}
+
+emoji_ext_menu() {
+	emoji_repair_run
+}
+
+emoji_ext_register() {
+	ext_menu_order+=("$emoji_ext_key")
+	ext_menu_labels["$emoji_ext_key"]="😀 Repair Emoji Font"
+	ext_menu_actions["$emoji_ext_key"]="emoji_ext_menu"
+}
+
+echo "Loading emoji font extension..."
+echo ""
+
+if emoji_needs_repair; then
+	emoji_ext_register
+	echo " ✓ loaded extension"
+else
+	echo " ✓ extension not needed"
+fi
+
+echo ""

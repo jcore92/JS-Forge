@@ -88,6 +88,8 @@ else
     fi
 fi
 
+sleep 3
+
 # Move generated AppImage into versioned build folder
 builddir="./Builds/${appimageappname}-${VERSION}"
 mkdir -p "$builddir"
@@ -103,5 +105,6 @@ else
     echo "No generated AppImage found to move."
 fi
 
+echo "operation complete."
 # exec bash
 exit
