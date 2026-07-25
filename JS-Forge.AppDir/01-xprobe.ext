@@ -149,7 +149,7 @@ Enabling the package manager bridge compatibility layer...
 		xprob_messages+=("Dependencies")
 
         declare -g missing=()
-        local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "whiptail" "flatpak")
+        local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "curl" "whiptail" "flatpak")
         local prog
 
         for prog in "${programs[@]}"; do

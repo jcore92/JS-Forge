@@ -88,6 +88,8 @@ else
     fi
 fi
 
+sleep 3
+
 # Move generated AppImage into versioned build folder
 builddir="./Builds/${appimageappname}-${VERSION}"
 mkdir -p "$builddir"
@@ -98,7 +100,6 @@ sleep 1
 
 if [[ -n "$latest_appimage" ]]; then
     echo "Moving $(basename "$latest_appimage") to $builddir/"
-	sleep 3
     mv "$latest_appimage" "$builddir/"
 else
     echo "No generated AppImage found to move."
