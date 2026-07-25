@@ -200,7 +200,8 @@ Attempting to install package(s):
 
         for flatpak_app in "${required_flatpaks[@]}"; do
             case "$flatpak_app" in
-                "it.mijorus.gearlever") flatpak_name="Gear Lever" ;;
+                "it.mijorus.gearlever") flatpak_name="gear lever" ;;
+				"com.github.tchx84.Flatseal") flatpak_name="flatseal" ;;
                 *) flatpak_name="$flatpak_app" ;;
             esac
 
