@@ -563,9 +563,9 @@ A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow,
 	creds4="Credits & Acknowledgements
 ==============================
 jcore92 - Director/Programmer/Founder
-Perplexity - AI Code Advisor/Lead Programmer
-Gemini - AI Code Monkey #2
-Leo - AI Code Monkey #1"
+Perplexity - Code Advisor/Programmer
+Gemini - Code Monkey #2
+Leo - Code Monkey #1"
 
 	if [ "$gui_flag" = "1" ]; then
 
