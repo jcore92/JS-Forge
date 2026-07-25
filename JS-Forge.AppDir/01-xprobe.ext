@@ -144,19 +144,10 @@ Enabling the package manager bridge compatibility layer...
     text_delay
     echo " ✓ init system: $detected_init_system" | if [ "$tui_flag" = "1" ]; then cat; fi
 
-    tool_to_pkg_name() {
-        case "$1" in
-            "7z") echo "7zip" ;;
-            "dig") echo "dnsutils" ;;
-            "sha256sum") echo "coreutils" ;;
-            "xdg-open") echo "xdg-utils" ;;
-            "chsh") echo "shadow" ;;
-            "tput") echo "ncurses" ;;
-            *) echo "$1" ;;
-        esac
-    }
-
     check_programs() {
+		xprob_messages+=("")
+		xprob_messages+=("Packages & Flatpaks")
+
         declare -g missing=()
         local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "whiptail" "flatpak")
         local prog
