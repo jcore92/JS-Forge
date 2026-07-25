@@ -270,6 +270,7 @@ Please use cloned repositories responsibly.
 Only run scripts from sources you trust, and
 review code before executing it." \
             \$default_messagebox_gui_dimensions
+			>/dev/null 2>&1
         ;;
     pull)
         pull_repositories "\$app_script_folder_loc"
