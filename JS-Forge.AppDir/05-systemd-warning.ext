@@ -21,7 +21,7 @@ Due to the size of this code base systemd is considered a massive attack surface
 		sleep 5
 	fi
 
-	#xprob_messages+=(" ✕ systemd: detected")
+	#xprobe_messages+=(" ✕ systemd: detected")
 else
 
 echo " ✓ system okay

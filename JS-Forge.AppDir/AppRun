@@ -105,7 +105,7 @@ variables() {
 
 	current_user="$whoami"
 
-	declare -ga xprob_messages=()
+	declare -ga xprobe_messages=()
 
 	detect_display_server() {
 		if [ -n "$WAYLAND_DISPLAY" ] && [ -n "$DISPLAY" ]; then
@@ -558,7 +558,7 @@ https://jcorestudios.com/
 https://github.com/jcore92"
 
 	creds3="Description:
-A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, extension loading, and lightweight environment probing; infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA."
+A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, extension loading, and lightweight environment probing; infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA combined with AI assistance."
 
 	creds4="Credits & Acknowledgements
 ==============================
@@ -755,15 +755,15 @@ load_extensions() {
         shopt -u nullglob
     done
 
-    xprob_messages+=( "" )
-    xprob_messages+=( "Extensions" )
+    xprobe_messages+=( "" )
+    xprobe_messages+=( "Extensions" )
 
     if [ "$found_any" = "0" ]; then
-        xprob_messages+=( " ✕ no extensions found." )
+        xprobe_messages+=( " ✕ no extensions found." )
         echo "No .ext files found"
         sleep 2
     else
-        xprob_messages+=( "${ext_report_lines[@]}" )
+        xprobe_messages+=( "${ext_report_lines[@]}" )
     fi
 }
 
@@ -1010,7 +1010,7 @@ Error: Could not find the full path for $script_name.
 # Runtime
 # =============================================================================
 
-# -s/script Variable Loading Switch
+# -s/script Variable Loading Switch --unused
 if [ "$1" == -s ]; then
 
 	clear
@@ -1058,7 +1058,7 @@ if [ "$1" == "" ]; then
 		load_extensions
 		echo "100" >&3
 		exec 3>&-                                                                                                                                      # Close fd
-		printf '%s\n' "${xprob_messages[@]}" | zenity --text-info --title="$app_name: $probe_name Report" --timeout=3 $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label=""
+		printf '%s\n' "${xprobe_messages[@]}" | zenity --text-info --title="$app_name: $probe_name Report" --timeout=3 $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label=""
 		#exit
 	else
 		clear
@@ -1084,7 +1084,7 @@ if [ "$1" == "" ]; then
 
 fi
 
-# -t/testing Startup Switch
+# -t/testing Startup Switch --unused
 if [ "$1" == "-t" ]; then
 
 	clear
