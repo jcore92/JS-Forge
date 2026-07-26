@@ -88,7 +88,7 @@ else
     fi
 fi
 
-sleep 3
+sleep 1.5
 
 # Move generated AppImage into versioned build folder
 builddir="./Builds/${appimageappname}-${VERSION}"
