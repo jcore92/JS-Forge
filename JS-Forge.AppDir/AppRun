@@ -54,7 +54,7 @@ variables() {
 	app_ver_minor="1"
 	app_ver_build="1"
 	app_ver_stage="beta"
-	app_ver_build_date="built on 7/26/2026"
+	app_ver_build_date="built on 7/28/2026"
 	probe_name="System"
 
 	allow_user_extensions="0"
@@ -236,8 +236,8 @@ variables() {
 
 	export DISTRO_FAMILY
 	export JSF_APP_NAME="JS-Forge"
-	export JSF_APP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$JSF_APP_NAME"
-	export JSF_RUNTIME_CORE_PATH="$JSF_APP_DATA_DIR/runtime-core.lib"
+	#export JSF_APP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$JSF_APP_NAME"
+	#export JSF_RUNTIME_CORE_PATH="$JSF_APP_DATA_DIR/runtime-core.lib"
 
 	# =============================================================================
 	# DEFAULT GUI WINDOW SIZES & OVERRIDES BASED ON DE:
