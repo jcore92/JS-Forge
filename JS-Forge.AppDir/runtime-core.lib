@@ -286,7 +286,8 @@ jsf_launch_terminal_script() {
 
 jsf_launch_terminal_script_nopause() {
     local full_path="$1"
-    jsf_launch_terminal_command "\"$full_path\""
+    local launch_delay="${JSF_LAUNCH_DELAY:-0.2}"
+    jsf_launch_terminal_command "\"$full_path\"; sleep $launch_delay"
 }
 
 # =============================================================================
