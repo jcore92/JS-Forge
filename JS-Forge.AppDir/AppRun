@@ -52,9 +52,9 @@ variables() {
 
 	app_ver_major="1"
 	app_ver_minor="1"
-	app_ver_build="0"
+	app_ver_build="1"
 	app_ver_stage="beta"
-	app_ver_build_date="built on 7/24/26"
+	app_ver_build_date="built on 7/28/2026"
 	probe_name="System"
 
 	allow_user_extensions="0"
@@ -236,8 +236,8 @@ variables() {
 
 	export DISTRO_FAMILY
 	export JSF_APP_NAME="JS-Forge"
-	export JSF_APP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$JSF_APP_NAME"
-	export JSF_RUNTIME_CORE_PATH="$JSF_APP_DATA_DIR/runtime-core.lib"
+	#export JSF_APP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$JSF_APP_NAME"
+	#export JSF_RUNTIME_CORE_PATH="$JSF_APP_DATA_DIR/runtime-core.lib"
 
 	# =============================================================================
 	# DEFAULT GUI WINDOW SIZES & OVERRIDES BASED ON DE:
@@ -663,21 +663,33 @@ is_runnable_script() {
 }
 
 run_selected_script() {
-	local full_path="$1"
-	local selection
-	selection="$(basename "$full_path")"
+    local full_path="$1"
+    local selection
+    local no_pause="0"
 
-	chmod +x "$full_path" >/dev/null 2>&1
+    selection="$(basename "$full_path")"
+    chmod +x "$full_path" >/dev/null 2>&1
 
-	if [ "$gui_flag" = "1" ]; then
-		jsf_launch_terminal_script "$full_path"
-	else
-		sleep .3
-		echo ""
-		"$full_path"
-		divider
-		entertocontinue | center
-	fi
+    if grep -Eq '^[[:space:]]*jsf_no_pause="1"' "$full_path" 2>/dev/null; then
+        no_pause="1"
+    fi
+
+    if [ "$gui_flag" = "1" ]; then
+        if [ "$no_pause" = "1" ]; then
+            jsf_launch_terminal_script_nopause "$full_path"
+        else
+            jsf_launch_terminal_script "$full_path"
+        fi
+    else
+        sleep .3
+        echo ""
+        "$full_path"
+
+        if [ "$no_pause" != "1" ]; then
+            divider
+            entertocontinue | center
+        fi
+    fi
 }
 
 view_script_source() {
