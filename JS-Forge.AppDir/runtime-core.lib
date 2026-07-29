@@ -298,37 +298,41 @@ jsf_launch_terminal_script_nopause() {
 # =============================================================================
 
 jsf_detect_distro_family() {
-	local distro_id=""
-	local distro_like=""
+    local distro_id=""
+    local distro_like=""
 
-	if [ -r /etc/os-release ]; then
-		distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-		distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-	fi
+    if [ -r /etc/os-release ]; then
+        distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+        distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+    fi
 
-	case "$distro_id" in
-	debian | ubuntu | devuan)
-		echo "debian"
-		;;
-	arch | artix)
-		echo "arch"
-		;;
-	fedora | rhel | centos | rocky | almalinux)
-		echo "rhel"
-		;;
-	suse | opensuse* | sles)
-		echo "suse"
-		;;
-	*)
-		case "$distro_like" in
-		*debian*) echo "debian" ;;
-		*arch*) echo "arch" ;;
-		*rhel* | *fedora*) echo "rhel" ;;
-		*suse* | *opensuse*) echo "suse" ;;
-		*) echo "generic" ;;
-		esac
-		;;
-	esac
+    case "$distro_id" in
+    debian | ubuntu | devuan)
+        echo "debian"
+        ;;
+    arch | artix)
+        echo "arch"
+        ;;
+    fedora | rhel | centos | rocky | almalinux)
+        echo "rhel"
+        ;;
+    suse | opensuse* | sles)
+        echo "suse"
+        ;;
+    mandriva | openmandriva | pclinuxos)
+        echo "mandriva"
+        ;;
+    *)
+        case "$distro_like" in
+        *debian*) echo "debian" ;;
+        *arch*) echo "arch" ;;
+        *rhel* | *fedora*) echo "rhel" ;;
+        *suse* | *opensuse*) echo "suse" ;;
+        *mandriva* | *openmandriva*) echo "mandriva" ;;
+        *) echo "generic" ;;
+        esac
+        ;;
+    esac
 }
 
 jsf_tool_to_pkg_name() {
@@ -367,6 +371,22 @@ jsf_tool_to_pkg_name() {
 		esac
 		;;
 	rhel)
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "bind-utils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "util-linux-user" ;;
+		"tput") echo "ncurses" ;;
+		"whiptail") echo "newt" ;;
+		"clamscan") echo "clamav" ;;
+		"freshclam") echo "clamav-update" ;;
+		"clamdscan" | "clamd") echo "clamd" ;;
+		"ufw") echo "ufw" ;;
+		*) echo "$1" ;;
+		esac
+		;;
+	mandriva)
 		case "$1" in
 		"7z") echo "7zip" ;;
 		"dig") echo "bind-utils" ;;
