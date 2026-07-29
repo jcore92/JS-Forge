@@ -78,23 +78,23 @@ Program cannot continue, exiting." | if [ "$gui_flag" = "1" ]; then
     prettyname="$(grep 'PRETTY_NAME' /etc/os-release | awk -F '"' '{print $2}')"
 
     if grep -qi "ubuntu" /etc/os-release; then
-        xprobe_messages+=("$prettyname")
         xprobe_messages+=("$detected_hostname")
 		xprobe_messages+=("$detected_lan_ip")
+		xprobe_messages+=("$prettyname")
         xprobe_messages+=(" ✓ package manager: $package_manager")
         xprobe_messages+=(" ✓ package manager bridge: disabled")
         xprobe_messages+=(" ✓ desktop environment: $detected_desktop_environment")
     elif grep -qi "debian" /etc/os-release; then
-        xprobe_messages+=("$prettyname")
         xprobe_messages+=("$detected_hostname")
 		xprobe_messages+=("$detected_lan_ip")
+		xprobe_messages+=("$prettyname")
         xprobe_messages+=(" ✓ package manager: $package_manager")
         xprobe_messages+=(" ✓ package manager bridge: disabled")
         xprobe_messages+=(" ✓ desktop environment: $detected_desktop_environment")
     else
-        xprobe_messages+=("$prettyname")
         xprobe_messages+=("$detected_hostname")
 		xprobe_messages+=("$detected_lan_ip")
+		xprobe_messages+=("$prettyname")
         xprobe_messages+=(" ✓ package manager: $package_manager")
         xprobe_messages+=(" ✓ package manager bridge: enabled")
         xprobe_messages+=(" ✓ desktop environment: $detected_desktop_environment")
@@ -110,13 +110,13 @@ Enabling the package manager bridge compatibility layer...
     fi
 
     text_delay
-    echo "$prettyname" | if [ "$tui_flag" = "1" ]; then cat; fi
-
-    text_delay
     echo "$detected_hostname" | if [ "$tui_flag" = "1" ]; then cat; fi
 
 	text_delay
     echo "$detected_lan_ip" | if [ "$tui_flag" = "1" ]; then cat; fi
+	
+	text_delay
+    echo "$prettyname" | if [ "$tui_flag" = "1" ]; then cat; fi
 
     text_delay
     echo " ✓ package manager: $package_manager" | if [ "$tui_flag" = "1" ]; then cat; fi

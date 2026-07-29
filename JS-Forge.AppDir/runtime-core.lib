@@ -145,40 +145,40 @@ jsf_init_runtime_core() {
 }
 
 resolve_extension_dirs() {
-    local exec_dir
-    local user_ext_dir
-    declare -A seen_dirs=()
+	local exec_dir
+	local user_ext_dir
+	declare -A seen_dirs=()
 
-    exec_dir="${JSF_EXEC_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd -P)}"
-    user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
+	exec_dir="${JSF_EXEC_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[1]}")" && pwd -P)}"
+	user_ext_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 
-    extension_dirs=()
+	extension_dirs=()
 
-    if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
-        local real_appdir
-        real_appdir="$(cd -- "$APPDIR" && pwd -P)"
-        if [ -z "${seen_dirs[$real_appdir]}" ]; then
-            extension_dirs+=("$real_appdir")
-            seen_dirs["$real_appdir"]="1"
-        fi
-    elif [ -d "$exec_dir" ]; then
-        local real_exec_dir
-        real_exec_dir="$(cd -- "$exec_dir" && pwd -P)"
-        if [ -z "${seen_dirs[$real_exec_dir]}" ]; then
-            extension_dirs+=("$real_exec_dir")
-            seen_dirs["$real_exec_dir"]="1"
-        fi
-    fi
+	if [ -n "$APPDIR" ] && [ -d "$APPDIR" ]; then
+		local real_appdir
+		real_appdir="$(cd -- "$APPDIR" && pwd -P)"
+		if [ -z "${seen_dirs[$real_appdir]}" ]; then
+			extension_dirs+=("$real_appdir")
+			seen_dirs["$real_appdir"]="1"
+		fi
+	elif [ -d "$exec_dir" ]; then
+		local real_exec_dir
+		real_exec_dir="$(cd -- "$exec_dir" && pwd -P)"
+		if [ -z "${seen_dirs[$real_exec_dir]}" ]; then
+			extension_dirs+=("$real_exec_dir")
+			seen_dirs["$real_exec_dir"]="1"
+		fi
+	fi
 
-    if [ "$allow_user_extensions" = "1" ]; then
-        mkdir -p "$user_ext_dir"
-        local real_user_dir
-        real_user_dir="$(cd -- "$user_ext_dir" && pwd -P)"
-        if [ -z "${seen_dirs[$real_user_dir]}" ]; then
-            extension_dirs+=("$real_user_dir")
-            seen_dirs["$real_user_dir"]="1"
-        fi
-    fi
+	if [ "$allow_user_extensions" = "1" ]; then
+		mkdir -p "$user_ext_dir"
+		local real_user_dir
+		real_user_dir="$(cd -- "$user_ext_dir" && pwd -P)"
+		if [ -z "${seen_dirs[$real_user_dir]}" ]; then
+			extension_dirs+=("$real_user_dir")
+			seen_dirs["$real_user_dir"]="1"
+		fi
+	fi
 }
 
 jsf_detect_privilege() {
@@ -280,14 +280,14 @@ jsf_launch_terminal_command() {
 }
 
 jsf_launch_terminal_script() {
-    local full_path="$1"
-    jsf_launch_terminal_command "\"$full_path\"; echo; read -p 'Press enter to continue'"
+	local full_path="$1"
+	jsf_launch_terminal_command "\"$full_path\"; echo; read -p 'Press enter to continue'"
 }
 
 jsf_launch_terminal_script_nopause() {
-    local full_path="$1"
-    local launch_delay="${JSF_LAUNCH_DELAY:-0.2}"
-    jsf_launch_terminal_command "\"$full_path\"; sleep $launch_delay"
+	local full_path="$1"
+	local launch_delay="${JSF_LAUNCH_DELAY:-0.2}"
+	jsf_launch_terminal_command "\"$full_path\"; sleep $launch_delay"
 }
 
 # =============================================================================
@@ -296,33 +296,37 @@ jsf_launch_terminal_script_nopause() {
 # =============================================================================
 
 jsf_detect_distro_family() {
-	local distro_id=""
-	local distro_like=""
+    local distro_id=""
+    local distro_like=""
 
-	if [ -r /etc/os-release ]; then
-		distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-		distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-	fi
+    if [ -r /etc/os-release ]; then
+        distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+        distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+    fi
 
-	case "$distro_id" in
-	debian | ubuntu | devuan)
-		echo "debian"
-		;;
-	arch | artix)
-		echo "arch"
-		;;
-	fedora | rhel | centos | rocky | almalinux)
-		echo "rhel"
-		;;
-	*)
-		case "$distro_like" in
-		*debian*) echo "debian" ;;
-		*arch*) echo "arch" ;;
-		*rhel* | *fedora*) echo "rhel" ;;
-		*) echo "generic" ;;
-		esac
-		;;
-	esac
+    case "$distro_id" in
+        debian | ubuntu | devuan)
+            echo "debian"
+            ;;
+        arch | artix)
+            echo "arch"
+            ;;
+        fedora | rhel | centos | rocky | almalinux)
+            echo "rhel"
+            ;;
+        suse | opensuse* | sles)
+            echo "suse"
+            ;;
+        *)
+            case "$distro_like" in
+                *debian*) echo "debian" ;;
+                *arch*) echo "arch" ;;
+                *rhel* | *fedora*) echo "rhel" ;;
+                *suse* | *opensuse*) echo "suse" ;;
+                *) echo "generic" ;;
+            esac
+            ;;
+    esac
 }
 
 jsf_tool_to_pkg_name() {
@@ -338,6 +342,10 @@ jsf_tool_to_pkg_name() {
 		"chsh") echo "shadow" ;;
 		"tput") echo "ncurses-bin" ;;
 		"whiptail") echo "whiptail" ;;
+		"clamscan") echo "clamav" ;;
+		"freshclam") echo "clamav-freshclam" ;;
+		"clamdscan") echo "clamdscan" ;;
+		"clamd") echo "clamav-daemon" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -350,6 +358,7 @@ jsf_tool_to_pkg_name() {
 		"chsh") echo "util-linux" ;;
 		"tput") echo "ncurses" ;;
 		"whiptail") echo "libnewt" ;;
+		"clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -362,9 +371,25 @@ jsf_tool_to_pkg_name() {
 		"chsh") echo "util-linux-user" ;;
 		"tput") echo "ncurses" ;;
 		"whiptail") echo "newt" ;;
+		"clamscan") echo "clamav" ;;
+		"freshclam") echo "clamav-update" ;;
+		"clamdscan" | "clamd") echo "clamd" ;;
 		*) echo "$1" ;;
 		esac
 		;;
+	suse)
+        case "$1" in
+            "7z") echo "7zip" ;;
+            "dig") echo "bind-utils" ;;
+            "sha256sum") echo "coreutils" ;;
+            "xdg-open") echo "xdg-utils" ;;
+            "chsh") echo "shadow" ;;
+            "tput") echo "ncurses" ;;
+            "whiptail") echo "newt" ;;
+            "clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
+            *) echo "$1" ;;
+        esac
+        ;;
 	*)
 		case "$1" in
 		"7z") echo "7zip" ;;
@@ -385,14 +410,14 @@ jsf_is_native_installed() {
 }
 
 jsf_is_flatpak_installed() {
-    local app_id="$1"
-    flatpak list --user --app --columns=application 2>/dev/null | grep -Fxq "$app_id"
+	local app_id="$1"
+	flatpak list --user --app --columns=application 2>/dev/null | grep -Fxq "$app_id"
 }
 
 jsf_ensure_flathub() {
-    if ! flatpak remotes --user --columns=name 2>/dev/null | grep -Fxq "flathub"; then
-        flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
-    fi
+	if ! flatpak remotes --user --columns=name 2>/dev/null | grep -Fxq "flathub"; then
+		flatpak --user remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+	fi
 }
 
 jsf_install_native_packages() {
@@ -487,4 +512,3 @@ jsf_require_all() {
 
 	return 0
 }
-
