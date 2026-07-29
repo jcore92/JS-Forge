@@ -131,6 +131,8 @@ endprog() {
 jsf_runtime_core_loaded="1"
 
 jsf_init_runtime_core() {
+	PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	export PATH
 	app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 	runtime_core_name="runtime-core.lib"
 	runtime_core_path="$app_data_dir/$runtime_core_name"
@@ -296,37 +298,37 @@ jsf_launch_terminal_script_nopause() {
 # =============================================================================
 
 jsf_detect_distro_family() {
-    local distro_id=""
-    local distro_like=""
+	local distro_id=""
+	local distro_like=""
 
-    if [ -r /etc/os-release ]; then
-        distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-        distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-    fi
+	if [ -r /etc/os-release ]; then
+		distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+		distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+	fi
 
-    case "$distro_id" in
-        debian | ubuntu | devuan)
-            echo "debian"
-            ;;
-        arch | artix)
-            echo "arch"
-            ;;
-        fedora | rhel | centos | rocky | almalinux)
-            echo "rhel"
-            ;;
-        suse | opensuse* | sles)
-            echo "suse"
-            ;;
-        *)
-            case "$distro_like" in
-                *debian*) echo "debian" ;;
-                *arch*) echo "arch" ;;
-                *rhel* | *fedora*) echo "rhel" ;;
-                *suse* | *opensuse*) echo "suse" ;;
-                *) echo "generic" ;;
-            esac
-            ;;
-    esac
+	case "$distro_id" in
+	debian | ubuntu | devuan)
+		echo "debian"
+		;;
+	arch | artix)
+		echo "arch"
+		;;
+	fedora | rhel | centos | rocky | almalinux)
+		echo "rhel"
+		;;
+	suse | opensuse* | sles)
+		echo "suse"
+		;;
+	*)
+		case "$distro_like" in
+		*debian*) echo "debian" ;;
+		*arch*) echo "arch" ;;
+		*rhel* | *fedora*) echo "rhel" ;;
+		*suse* | *opensuse*) echo "suse" ;;
+		*) echo "generic" ;;
+		esac
+		;;
+	esac
 }
 
 jsf_tool_to_pkg_name() {
@@ -381,19 +383,19 @@ jsf_tool_to_pkg_name() {
 		esac
 		;;
 	suse)
-        case "$1" in
-            "7z") echo "7zip" ;;
-            "dig") echo "bind-utils" ;;
-            "sha256sum") echo "coreutils" ;;
-            "xdg-open") echo "xdg-utils" ;;
-            "chsh") echo "shadow" ;;
-            "tput") echo "ncurses" ;;
-            "whiptail") echo "newt" ;;
-            "clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
-			"ufw") echo "ufw" ;;
-            *) echo "$1" ;;
-        esac
-        ;;
+		case "$1" in
+		"7z") echo "7zip" ;;
+		"dig") echo "bind-utils" ;;
+		"sha256sum") echo "coreutils" ;;
+		"xdg-open") echo "xdg-utils" ;;
+		"chsh") echo "shadow" ;;
+		"tput") echo "ncurses" ;;
+		"whiptail") echo "newt" ;;
+		"clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
+		"ufw") echo "ufw" ;;
+		*) echo "$1" ;;
+		esac
+		;;
 	*)
 		case "$1" in
 		"7z") echo "7zip" ;;
