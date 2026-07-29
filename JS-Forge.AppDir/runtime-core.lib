@@ -346,6 +346,7 @@ jsf_tool_to_pkg_name() {
 		"freshclam") echo "clamav-freshclam" ;;
 		"clamdscan") echo "clamdscan" ;;
 		"clamd") echo "clamav-daemon" ;;
+		"ufw") echo "ufw" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -359,6 +360,7 @@ jsf_tool_to_pkg_name() {
 		"tput") echo "ncurses" ;;
 		"whiptail") echo "libnewt" ;;
 		"clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
+		"ufw") echo "ufw" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -374,6 +376,7 @@ jsf_tool_to_pkg_name() {
 		"clamscan") echo "clamav" ;;
 		"freshclam") echo "clamav-update" ;;
 		"clamdscan" | "clamd") echo "clamd" ;;
+		"ufw") echo "ufw" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -387,6 +390,7 @@ jsf_tool_to_pkg_name() {
             "tput") echo "ncurses" ;;
             "whiptail") echo "newt" ;;
             "clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
+			"ufw") echo "ufw" ;;
             *) echo "$1" ;;
         esac
         ;;
@@ -399,6 +403,7 @@ jsf_tool_to_pkg_name() {
 		"chsh") echo "shadow" ;;
 		"tput") echo "ncurses" ;;
 		"whiptail") echo "whiptail" ;;
+		"ufw") echo "ufw" ;;
 		*) echo "$1" ;;
 		esac
 		;;
