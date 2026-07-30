@@ -131,8 +131,8 @@ endprog() {
 jsf_runtime_core_loaded="1"
 
 jsf_init_runtime_core() {
-	PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-	export PATH
+	#PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	#export PATH
 	app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 	runtime_core_name="runtime-core.lib"
 	runtime_core_path="$app_data_dir/$runtime_core_name"
