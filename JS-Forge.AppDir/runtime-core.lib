@@ -396,7 +396,7 @@ jsf_tool_to_pkg_name() {
 		"tput") echo "ncurses" ;;
 		"whiptail") echo "newt" ;;
 		"clamscan") echo "clamav" ;;
-		"freshclam") echo "clamav-update" ;;
+		"freshclam") echo "clamav-db" ;;
 		"clamdscan" | "clamd") echo "clamd" ;;
 		"ufw") echo "ufw" ;;
 		*) echo "$1" ;;
