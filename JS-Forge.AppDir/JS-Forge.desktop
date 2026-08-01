@@ -3,7 +3,7 @@ Name=JS-Forge
 Exec=AppRun
 Icon=JS-Forge-Icon
 Type=Application
-Categories=Utility;
+Categories=Utility;Monitor;
 Comment=A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, lightweight environment probing, and extension loading.
 Keywords=bash;script;scripting;linux;JS-Forge;
 
