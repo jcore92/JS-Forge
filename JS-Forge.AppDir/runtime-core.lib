@@ -353,6 +353,8 @@ jsf_tool_to_pkg_name() {
 		"clamdscan") echo "clamdscan" ;;
 		"clamd") echo "clamav-daemon" ;;
 		"ufw") echo "ufw" ;;
+		"crontab") echo "cronie" ;;
+		"libreoffice") echo "libreoffice" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -367,6 +369,8 @@ jsf_tool_to_pkg_name() {
 		"whiptail") echo "libnewt" ;;
 		"clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
 		"ufw") echo "ufw" ;;
+		"crontab") echo "cronie" ;;
+		"libreoffice") echo "libreoffice" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -383,10 +387,13 @@ jsf_tool_to_pkg_name() {
 		"freshclam") echo "clamav-update" ;;
 		"clamdscan" | "clamd") echo "clamd" ;;
 		"ufw") echo "ufw" ;;
+		"crontab") echo "cronie" ;;
+		"libreoffice") echo "libreoffice" ;;
 		*) echo "$1" ;;
 		esac
 		;;
 	mandriva)
+		libreoffice_pkg="$(dnf repoquery --available --qf '%{name}' 'libreoffice[0-9]*' 2>/dev/null | sort -u | tail -n 1)"
 		case "$1" in
 		"7z") echo "7zip" ;;
 		"dig") echo "bind-utils" ;;
@@ -399,6 +406,8 @@ jsf_tool_to_pkg_name() {
 		"freshclam") echo "clamav-db" ;;
 		"clamdscan" | "clamd") echo "clamd" ;;
 		"ufw") echo "ufw" ;;
+		"crontab") echo "cronie" ;;
+		"libreoffice") echo "${libreoffice_pkg:-libreoffice}" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -413,6 +422,8 @@ jsf_tool_to_pkg_name() {
 		"whiptail") echo "newt" ;;
 		"clamscan" | "freshclam" | "clamdscan" | "clamd") echo "clamav" ;;
 		"ufw") echo "ufw" ;;
+		"crontab") echo "cronie" ;;
+		"libreoffice") echo "libreoffice" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -426,6 +437,8 @@ jsf_tool_to_pkg_name() {
 		"tput") echo "ncurses" ;;
 		"whiptail") echo "whiptail" ;;
 		"ufw") echo "ufw" ;;
+		"crontab") echo "cronie" ;;
+		"libreoffice") echo "libreoffice" ;;
 		*) echo "$1" ;;
 		esac
 		;;
