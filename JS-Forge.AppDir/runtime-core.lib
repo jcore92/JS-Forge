@@ -356,6 +356,7 @@ jsf_tool_to_pkg_name() {
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
 		"vivaldi-stable") echo "vivaldi-browser" ;;
+		"brave-browser-stable") echo "brave-browser-stable" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -373,6 +374,7 @@ jsf_tool_to_pkg_name() {
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
 		"vivaldi-stable") echo "vivaldi-browser" ;;
+		"brave-browser-stable") echo "brave-browser-stable" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -392,6 +394,7 @@ jsf_tool_to_pkg_name() {
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
 		"vivaldi-stable") echo "vivaldi-browser" ;;
+		"brave-browser-stable") echo "brave-browser-stable" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -412,6 +415,7 @@ jsf_tool_to_pkg_name() {
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "${libreoffice_pkg:-libreoffice}" ;;
 		"vivaldi-stable") echo "vivaldi-browser" ;;
+		"brave-browser-stable") echo "brave-browser-stable" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -429,6 +433,7 @@ jsf_tool_to_pkg_name() {
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
 		"vivaldi-stable") echo "vivaldi-browser" ;;
+		"brave-browser-stable") echo "brave-browser-stable" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -445,6 +450,7 @@ jsf_tool_to_pkg_name() {
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
 		"vivaldi-stable") echo "vivaldi-browser" ;;
+		"brave-browser-stable") echo "brave-browser-stable" ;;
 		*) echo "$1" ;;
 		esac
 		;;
