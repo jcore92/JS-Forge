@@ -355,6 +355,7 @@ jsf_tool_to_pkg_name() {
 		"ufw") echo "ufw" ;;
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
+		"vivaldi-stable") echo "vivaldi-browser" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -371,6 +372,7 @@ jsf_tool_to_pkg_name() {
 		"ufw") echo "ufw" ;;
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
+		"vivaldi-stable") echo "vivaldi-browser" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -389,6 +391,7 @@ jsf_tool_to_pkg_name() {
 		"ufw") echo "ufw" ;;
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
+		"vivaldi-stable") echo "vivaldi-browser" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -408,6 +411,7 @@ jsf_tool_to_pkg_name() {
 		"ufw") echo "ufw" ;;
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "${libreoffice_pkg:-libreoffice}" ;;
+		"vivaldi-stable") echo "vivaldi-browser" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -424,6 +428,7 @@ jsf_tool_to_pkg_name() {
 		"ufw") echo "ufw" ;;
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
+		"vivaldi-stable") echo "vivaldi-browser" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -439,6 +444,7 @@ jsf_tool_to_pkg_name() {
 		"ufw") echo "ufw" ;;
 		"crontab") echo "cronie" ;;
 		"libreoffice") echo "libreoffice" ;;
+		"vivaldi-stable") echo "vivaldi-browser" ;;
 		*) echo "$1" ;;
 		esac
 		;;
