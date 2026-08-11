@@ -440,8 +440,8 @@ https://github.com/jcore92"
 	creds3="Description:
 A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, extension loading, and lightweight environment probing; infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA combined with AI assistance.
 
-Supported Linux Distributions: MX Linux, Artix Linux, PCLinuxOS, and openSUSE
-(All other distros will probably work too (esp non-systemd-distros) although any issues will be unsupported)"
+Supported Linux Distributions: MX Linux, Artix Linux, PCLinuxOS, and openSUSE.
+(All other distros will probably work too, esp non-systemd-distros, although any issues will be unsupported as stock repositories anticipate specific OS conditions.)"
 
 	creds4="Credits & Acknowledgements
 Dedicated to my dog, Maya, because I needed a quicker workflow so I could spend time with you 🐺
