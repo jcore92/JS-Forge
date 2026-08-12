@@ -54,7 +54,7 @@ variables() {
 	app_ver_minor="1"
 	app_ver_build="3"
 	app_ver_stage="beta"
-	app_ver_build_date="built on 7/28/2026"
+	app_ver_build_date="built on 8/11/2026"
 	probe_name="System"
 
 	allow_user_extensions="0"
