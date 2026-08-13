@@ -589,154 +589,168 @@ jsf_github_latest_asset_url() {
 }
 
 jsf_install_github_appimage() {
-	local app_id="$1"
-	local github_repository="$2"
-	local asset_pattern="$3"
-	local launch="0"
-	local appimage_dir="$HOME/AppImages"
-	local download_dir="$HOME/Downloads"
-	local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/JS-Forge/appimages"
-	local state_file
-	local appimage_path=""
-	local appimage_url
-	local asset_name
-	local download_path
-	local partial_path
-	local option
+    local app_id="$1"
+    local github_repository="$2"
+    local asset_pattern="$3"
+    local launch="0"
+    local appimage_dir="$HOME/AppImages"
+    local download_dir="$HOME/Downloads"
+    local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/JS-Forge/appimages"
+    local state_file
+    local app_file_key
+    local appimage_path=""
+    local appimage_url
+    local asset_name
+    local download_path
+    local partial_path
+    local option
 
-	shift 3
+    shift 3
 
-	while [ "$#" -gt 0 ]; do
-		option="$1"
+    while [ "$#" -gt 0 ]; do
+        option="$1"
 
-		case "$option" in
-		--launch)
-			launch="1"
-			shift
-			;;
-		*)
-			echo "Unknown AppImage option: $option" >&2
-			return 1
-			;;
-		esac
-	done
+        case "$option" in
+            --launch)
+                launch="1"
+                shift
+                ;;
+            *)
+                echo "Unknown AppImage option: $option" >&2
+                return 1
+                ;;
+        esac
+    done
 
-	[ -n "$app_id" ] &&
-		[ -n "$github_repository" ] &&
-		[ -n "$asset_pattern" ] || {
-		echo "AppImage install details are incomplete." >&2
-		return 1
-	}
+    [ -n "$app_id" ] &&
+        [ -n "$github_repository" ] &&
+        [ -n "$asset_pattern" ] || {
+        echo "AppImage install details are incomplete." >&2
+        return 1
+    }
 
-	mkdir -p "$appimage_dir" "$download_dir" "$state_dir" || {
-		echo "Could not create an AppImage storage directory." >&2
-		return 1
-	}
+    mkdir -p "$appimage_dir" "$download_dir" "$state_dir" || {
+        echo "Could not create an AppImage storage directory." >&2
+        return 1
+    }
 
-	state_file="$state_dir/$app_id.path"
+    state_file="$state_dir/$app_id.path"
+    app_file_key="$(printf '%s' "$app_id" | tr '[:upper:]' '[:lower:]' | tr -cd '[:alnum:]')"
 
-	if [ -r "$state_file" ]; then
-		appimage_path="$(cat "$state_file" 2>/dev/null)"
+    [ -n "$app_file_key" ] || {
+        echo "AppImage ID must contain at least one letter or number." >&2
+        return 1
+    }
 
-		if [ -f "$appimage_path" ]; then
-			echo "$app_id is already installed: $appimage_path"
+    if [ -r "$state_file" ]; then
+        appimage_path="$(cat "$state_file" 2>/dev/null)"
 
-			if [ "$launch" = "1" ]; then
-				echo "Launching $app_id..."
-				setsid "$appimage_path" >/dev/null 2>&1 </dev/null &
-			fi
+        if [ -f "$appimage_path" ]; then
+            echo "$app_id is already installed: $appimage_path"
 
-			return 0
-		fi
-	fi
+            if [ "$launch" = "1" ]; then
+                echo "Launching $app_id..."
+                setsid "$appimage_path" >/dev/null 2>&1 < /dev/null &
+            fi
 
-	appimage_path="$(
-		find "$appimage_dir" \
-			-maxdepth 1 \
-			-type f \
-			-iname "${app_id}*appimage" \
-			-print -quit
-	)"
+            return 0
+        fi
+    fi
 
-	if [ -n "$appimage_path" ] && [ -f "$appimage_path" ]; then
-		printf '%s\n' "$appimage_path" >"$state_file"
-		echo "$app_id is already installed: $appimage_path"
+    appimage_path="$(
+        find "$appimage_dir" \
+            -maxdepth 1 \
+            -type f \
+            -iname "${app_file_key}*appimage" \
+            -print -quit
+    )"
 
-		if [ "$launch" = "1" ]; then
-			echo "Launching $app_id..."
-			setsid "$appimage_path" >/dev/null 2>&1 </dev/null &
-		fi
+    if [ -n "$appimage_path" ] && [ -f "$appimage_path" ]; then
+        printf '%s\n' "$appimage_path" > "$state_file" || {
+            echo "Could not save $app_id installation state: $state_file" >&2
+            return 1
+        }
 
-		return 0
-	fi
+        echo "$app_id is already installed: $appimage_path"
 
-	echo "Finding the latest $app_id AppImage release..."
-	appimage_url="$(jsf_github_latest_asset_url "$github_repository" "$asset_pattern")" || {
-		echo "Could not contact GitHub for $app_id releases." >&2
-		return 1
-	}
+        if [ "$launch" = "1" ]; then
+            echo "Launching $app_id..."
+            setsid "$appimage_path" >/dev/null 2>&1 < /dev/null &
+        fi
 
-	[ -n "$appimage_url" ] || {
-		echo "No matching AppImage release was found for $app_id." >&2
-		return 1
-	}
+        return 0
+    fi
 
-	asset_name="${appimage_url##*/}"
-	asset_name="${asset_name%%\?*}"
-	download_path="$download_dir/$asset_name"
-	partial_path="$download_path.part.$$"
+    echo "Finding the latest $app_id AppImage release..."
+    appimage_url="$(jsf_github_latest_asset_url "$github_repository" "$asset_pattern")" || {
+        echo "Could not contact GitHub for $app_id releases." >&2
+        return 1
+    }
 
-	echo "Downloading $app_id..."
-	curl --fail --location \
-		--connect-timeout 15 \
-		--max-time 600 \
-		"$appimage_url" \
-		--output "$partial_path" || {
-		rm -f "$partial_path"
-		echo "Could not download $app_id." >&2
-		return 1
-	}
+    [ -n "$appimage_url" ] || {
+        echo "No matching AppImage release was found for $app_id." >&2
+        return 1
+    }
 
-	mv -f "$partial_path" "$download_path" || {
-		rm -f "$partial_path"
-		echo "Could not save the $app_id download." >&2
-		return 1
-	}
+    asset_name="${appimage_url##*/}"
+    asset_name="${asset_name%%\?*}"
+    download_path="$download_dir/$asset_name"
+    partial_path="$download_path.part.$$"
 
-	chmod +x "$download_path" || {
-		echo "Could not make $app_id executable." >&2
-		return 1
-	}
+    echo "Downloading $app_id..."
+    curl --fail --location \
+        --connect-timeout 15 \
+        --max-time 600 \
+        "$appimage_url" \
+        --output "$partial_path" || {
+        rm -f "$partial_path"
+        echo "Could not download $app_id." >&2
+        return 1
+    }
 
-	echo "Integrating $app_id with Gear Lever..."
-	flatpak run it.mijorus.gearlever --integrate "$download_path" || {
-		echo "Gear Lever could not integrate $app_id." >&2
-		return 1
-	}
+    mv -f "$partial_path" "$download_path" || {
+        rm -f "$partial_path"
+        echo "Could not save the $app_id download." >&2
+        return 1
+    }
 
-	appimage_path="$(
-		find "$appimage_dir" \
-			-maxdepth 1 \
-			-type f \
-			-iname "${app_id}*appimage" \
-			-print -quit
-	)"
+    chmod +x "$download_path" || {
+        echo "Could not make $app_id executable." >&2
+        return 1
+    }
 
-	# Some Gear Lever configurations retain the AppImage at its original path.
-	if [ -z "$appimage_path" ] && [ -f "$download_path" ]; then
-		appimage_path="$download_path"
-	fi
+    echo "Integrating $app_id with Gear Lever..."
+    flatpak run it.mijorus.gearlever --integrate "$download_path" || {
+        echo "Gear Lever could not integrate $app_id." >&2
+        return 1
+    }
 
-	[ -n "$appimage_path" ] && [ -f "$appimage_path" ] || {
-		echo "$app_id could not be located after Gear Lever integration." >&2
-		return 1
-	}
+    appimage_path="$(
+        find "$appimage_dir" \
+            -maxdepth 1 \
+            -type f \
+            -iname "${app_file_key}*appimage" \
+            -print -quit
+    )"
 
-	printf '%s\n' "$appimage_path" >"$state_file"
-	echo "$app_id is ready: $appimage_path"
+    if [ -z "$appimage_path" ] && [ -f "$download_path" ]; then
+        appimage_path="$download_path"
+    fi
 
-	if [ "$launch" = "1" ]; then
-		echo "Launching $app_id..."
-		setsid "$appimage_path" >/dev/null 2>&1 </dev/null &
-	fi
+    [ -n "$appimage_path" ] && [ -f "$appimage_path" ] || {
+        echo "$app_id could not be located after Gear Lever integration." >&2
+        return 1
+    }
+
+    printf '%s\n' "$appimage_path" > "$state_file" || {
+        echo "Could not save $app_id installation state: $state_file" >&2
+        return 1
+    }
+
+    echo "$app_id is ready: $appimage_path"
+
+    if [ "$launch" = "1" ]; then
+        echo "Launching $app_id..."
+        setsid "$appimage_path" >/dev/null 2>&1 < /dev/null &
+    fi
 }
