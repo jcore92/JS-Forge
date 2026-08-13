@@ -358,6 +358,7 @@ jsf_tool_to_pkg_name() {
 		"vivaldi-stable") echo "vivaldi-browser" ;;
 		"brave-browser-stable") echo "brave-browser-stable" ;;
 		"rustdesk") echo "rustdesk" ;;
+		"wg" | "wg-quick") echo "wireguard-tools" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -377,6 +378,7 @@ jsf_tool_to_pkg_name() {
 		"vivaldi-stable") echo "vivaldi-browser" ;;
 		"brave-browser-stable") echo "brave-browser-stable" ;;
 		"rustdesk") echo "rustdesk" ;;
+		"wg" | "wg-quick") echo "wireguard-tools" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -398,6 +400,7 @@ jsf_tool_to_pkg_name() {
 		"vivaldi-stable") echo "vivaldi-browser" ;;
 		"brave-browser-stable") echo "brave-browser-stable" ;;
 		"rustdesk") echo "rustdesk" ;;
+		"wg" | "wg-quick") echo "wireguard-tools" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -420,6 +423,7 @@ jsf_tool_to_pkg_name() {
 		"vivaldi-stable") echo "vivaldi-browser" ;;
 		"brave-browser-stable") echo "brave-browser-stable" ;;
 		"rustdesk") echo "rustdesk" ;;
+		"wg" | "wg-quick") echo "wireguard-tools" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -439,6 +443,7 @@ jsf_tool_to_pkg_name() {
 		"vivaldi-stable") echo "vivaldi-browser" ;;
 		"brave-browser-stable") echo "brave-browser-stable" ;;
 		"rustdesk") echo "rustdesk-server" ;;
+		"wg" | "wg-quick") echo "wireguard-tools" ;;
 		*) echo "$1" ;;
 		esac
 		;;
@@ -457,6 +462,7 @@ jsf_tool_to_pkg_name() {
 		"vivaldi-stable") echo "vivaldi-browser" ;;
 		"brave-browser-stable") echo "brave-browser-stable" ;;
 		"rustdesk") echo "rustdesk" ;;
+		"wg" | "wg-quick") echo "wireguard-tools" ;;
 		*) echo "$1" ;;
 		esac
 		;;
