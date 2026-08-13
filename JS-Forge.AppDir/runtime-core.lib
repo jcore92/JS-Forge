@@ -298,41 +298,41 @@ jsf_launch_terminal_script_nopause() {
 # =============================================================================
 
 jsf_detect_distro_family() {
-    local distro_id=""
-    local distro_like=""
+	local distro_id=""
+	local distro_like=""
 
-    if [ -r /etc/os-release ]; then
-        distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-        distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
-    fi
+	if [ -r /etc/os-release ]; then
+		distro_id="$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+		distro_like="$(awk -F= '/^ID_LIKE=/{gsub(/"/, "", $2); print tolower($2)}' /etc/os-release)"
+	fi
 
-    case "$distro_id" in
-    debian | ubuntu | devuan)
-        echo "debian"
-        ;;
-    arch | artix)
-        echo "arch"
-        ;;
-    fedora | rhel | centos | rocky | almalinux)
-        echo "rhel"
-        ;;
-    suse | opensuse* | sles)
-        echo "suse"
-        ;;
-    mandriva | openmandriva | pclinuxos)
-        echo "mandriva"
-        ;;
-    *)
-        case "$distro_like" in
-        *debian*) echo "debian" ;;
-        *arch*) echo "arch" ;;
-        *rhel* | *fedora*) echo "rhel" ;;
-        *suse* | *opensuse*) echo "suse" ;;
-        *mandriva* | *openmandriva*) echo "mandriva" ;;
-        *) echo "generic" ;;
-        esac
-        ;;
-    esac
+	case "$distro_id" in
+	debian | ubuntu | devuan)
+		echo "debian"
+		;;
+	arch | artix)
+		echo "arch"
+		;;
+	fedora | rhel | centos | rocky | almalinux)
+		echo "rhel"
+		;;
+	suse | opensuse* | sles)
+		echo "suse"
+		;;
+	mandriva | openmandriva | pclinuxos)
+		echo "mandriva"
+		;;
+	*)
+		case "$distro_like" in
+		*debian*) echo "debian" ;;
+		*arch*) echo "arch" ;;
+		*rhel* | *fedora*) echo "rhel" ;;
+		*suse* | *opensuse*) echo "suse" ;;
+		*mandriva* | *openmandriva*) echo "mandriva" ;;
+		*) echo "generic" ;;
+		esac
+		;;
+	esac
 }
 
 jsf_tool_to_pkg_name() {
@@ -569,4 +569,174 @@ jsf_require_all() {
 	fi
 
 	return 0
+}
+
+jsf_github_latest_asset_url() {
+	local repository="$1"
+	local asset_pattern="$2"
+
+	curl --silent --show-error --fail \
+		--connect-timeout 15 \
+		--max-time 45 \
+		-H "Accept: application/vnd.github+json" \
+		"https://api.github.com/repos/$repository/releases/latest" |
+		jq -r --arg pattern "$asset_pattern" '
+            .assets[]?
+            | select(.browser_download_url | test($pattern; "i"))
+            | .browser_download_url
+        ' |
+		head -n 1
+}
+
+jsf_install_github_appimage() {
+	local app_id="$1"
+	local github_repository="$2"
+	local asset_pattern="$3"
+	local launch="0"
+	local appimage_dir="$HOME/AppImages"
+	local download_dir="$HOME/Downloads"
+	local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/JS-Forge/appimages"
+	local state_file
+	local appimage_path=""
+	local appimage_url
+	local asset_name
+	local download_path
+	local partial_path
+	local option
+
+	shift 3
+
+	while [ "$#" -gt 0 ]; do
+		option="$1"
+
+		case "$option" in
+		--launch)
+			launch="1"
+			shift
+			;;
+		*)
+			echo "Unknown AppImage option: $option" >&2
+			return 1
+			;;
+		esac
+	done
+
+	[ -n "$app_id" ] &&
+		[ -n "$github_repository" ] &&
+		[ -n "$asset_pattern" ] || {
+		echo "AppImage install details are incomplete." >&2
+		return 1
+	}
+
+	mkdir -p "$appimage_dir" "$download_dir" "$state_dir" || {
+		echo "Could not create an AppImage storage directory." >&2
+		return 1
+	}
+
+	state_file="$state_dir/$app_id.path"
+
+	if [ -r "$state_file" ]; then
+		appimage_path="$(cat "$state_file" 2>/dev/null)"
+
+		if [ -f "$appimage_path" ]; then
+			echo "$app_id is already installed: $appimage_path"
+
+			if [ "$launch" = "1" ]; then
+				echo "Launching $app_id..."
+				setsid "$appimage_path" >/dev/null 2>&1 </dev/null &
+			fi
+
+			return 0
+		fi
+	fi
+
+	appimage_path="$(
+		find "$appimage_dir" \
+			-maxdepth 1 \
+			-type f \
+			-iname "${app_id}*appimage" \
+			-print -quit
+	)"
+
+	if [ -n "$appimage_path" ] && [ -f "$appimage_path" ]; then
+		printf '%s\n' "$appimage_path" >"$state_file"
+		echo "$app_id is already installed: $appimage_path"
+
+		if [ "$launch" = "1" ]; then
+			echo "Launching $app_id..."
+			setsid "$appimage_path" >/dev/null 2>&1 </dev/null &
+		fi
+
+		return 0
+	fi
+
+	echo "Finding the latest $app_id AppImage release..."
+	appimage_url="$(jsf_github_latest_asset_url "$github_repository" "$asset_pattern")" || {
+		echo "Could not contact GitHub for $app_id releases." >&2
+		return 1
+	}
+
+	[ -n "$appimage_url" ] || {
+		echo "No matching AppImage release was found for $app_id." >&2
+		return 1
+	}
+
+	asset_name="${appimage_url##*/}"
+	asset_name="${asset_name%%\?*}"
+	download_path="$download_dir/$asset_name"
+	partial_path="$download_path.part.$$"
+
+	echo "Downloading $app_id..."
+	curl --fail --location \
+		--connect-timeout 15 \
+		--max-time 600 \
+		"$appimage_url" \
+		--output "$partial_path" || {
+		rm -f "$partial_path"
+		echo "Could not download $app_id." >&2
+		return 1
+	}
+
+	mv -f "$partial_path" "$download_path" || {
+		rm -f "$partial_path"
+		echo "Could not save the $app_id download." >&2
+		return 1
+	}
+
+	chmod +x "$download_path" || {
+		echo "Could not make $app_id executable." >&2
+		return 1
+	}
+
+	echo "Integrating $app_id with Gear Lever..."
+	flatpak run it.mijorus.gearlever --integrate "$download_path" || {
+		echo "Gear Lever could not integrate $app_id." >&2
+		return 1
+	}
+
+	appimage_path="$(
+		find "$appimage_dir" \
+			-maxdepth 1 \
+			-type f \
+			-iname "${app_id}*appimage" \
+			-print -quit
+	)"
+
+	# Some Gear Lever configurations retain the AppImage at its original path.
+	if [ -z "$appimage_path" ] && [ -f "$download_path" ]; then
+		appimage_path="$download_path"
+	fi
+
+	[ -n "$appimage_path" ] && [ -f "$appimage_path" ] || {
+		echo "$app_id could not be located after Gear Lever integration." >&2
+		return 1
+	}
+
+	printf '%s\n' "$appimage_path" >"$state_file"
+	echo "$app_id is ready: $appimage_path"
+
+	if [ "$launch" = "1" ]; then
+		echo "Launching $app_id..."
+		setsid "$appimage_path" >/dev/null 2>&1 </dev/null &
+	fi
 }
