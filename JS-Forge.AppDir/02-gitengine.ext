@@ -27,7 +27,8 @@ gitengine_ensure_repo_list() {
             "# https://github.com/owner/repository.git" \
             "#" \
             "# Starter repo(s):" \
-            "https://github.com/jcore92/JCS-Script-Vault.git" \
+            "https://github.com/jcore92/Linux-Control-Panel.git" \
+			"https://github.com/jcore92/JSF-Repositories.git" \
             >"$gitengine_repository_list"
     fi
 }
