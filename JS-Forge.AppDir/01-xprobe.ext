@@ -27,7 +27,7 @@ xprobe() {
     text_delay
     echo "Checking environment..."
 
-    if [ -z "$SSH_CONNECTION" ] && [ -z "$SSH_TTY" ] && [ -t 0 ] && [[ "$(tty 2>/dev/null)" == /dev/tty* ]]; then
+    if jsf_is_raw_console && [ "${allow_raw_tty:-0}" != "1" ]; then
         text_delay
         echo " ✕ TTY is not supported. Please use a Desktop Environment to open $app_name." | if [ "$gui_flag" = "1" ]; then
             zenity --text-info $default_mainmenu_gui_dimensions
@@ -103,7 +103,7 @@ Program cannot continue, exiting." | if [ "$gui_flag" = "1" ]; then
         echo " ✕ apt package manager NOT installed
 Enabling the package manager bridge compatibility layer...
 (package manager bridge support: zypper, pacman, dnf, yum.)" | if [ "$gui_flag" = "1" ]; then
-            zenity --progress --pulsate --timeout=2 --text="Enabling package manager bridge for non-apt distros..." --title="$app_name: package manager bridge" $default_loading_gui_dimensions --no-cancel &
+            zenity --progress --pulsate --timeout=1 --text="Enabling package manager bridge for non-apt distros..." --title="$app_name: package manager bridge" $default_loading_gui_dimensions --no-cancel &
         else
             cat | print_red
         fi
@@ -144,12 +144,16 @@ Enabling the package manager bridge compatibility layer...
     text_delay
     echo " ✓ init system: $detected_init_system" | if [ "$tui_flag" = "1" ]; then cat; fi
 
+    xprobe_messages+=(" ✓ session profile: $session_profile")
+    xprobe_messages+=(" ✓ desktop capability: $desktop_capable")
+
     check_programs() {
 		xprobe_messages+=("")
 		xprobe_messages+=("Dependencies")
 
         declare -g missing=()
-        local programs=("zenity" "nano" "git" "jq" "tput" "chsh" "xdg-open" "curl" "whiptail" "flatpak")
+        local programs=()
+        mapfile -t programs < <(jsf_startup_programs | awk '!seen[$0]++')
         local prog
 
         for prog in "${programs[@]}"; do
@@ -193,6 +197,10 @@ Attempting to install package(s):
     }
 
     check_flatpaks() {
+        if [ "${desktop_capable:-0}" != "1" ]; then
+            xprobe_messages+=(" ✓ desktop Flatpaks skipped ($session_profile)")
+            return 0
+        fi
         local missing_flatpaks=()
         local flatpak_app
         local flatpak_name
@@ -237,7 +245,7 @@ Attempting to install package(s):
     }
 
     if check_programs; then
-        sleep .3
+        sleep .15
     else
         text_delay
         echo "
@@ -259,7 +267,7 @@ $pkgmngr_install ${missing[*]}" | if [ "$gui_flag" = "1" ]; then
     fi
 
     if check_flatpaks; then
-        sleep .3
+        sleep .15
     else
         text_delay
         echo "

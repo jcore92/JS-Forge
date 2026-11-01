@@ -5,38 +5,36 @@
 # =============================================================================
 
 bootstrap_runtime_core() {
-	local script_dir
-	local source_runtime=""
-
-	script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-	export JSF_EXEC_DIR="$script_dir"
-	app_name="JS-Forge"
-	app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
-	runtime_core_name="runtime-core.lib"
-	runtime_core_path="$app_data_dir/$runtime_core_name"
-
-	mkdir -p "$app_data_dir"
-
-	if [ -n "$APPDIR" ] && [ -f "$APPDIR/$runtime_core_name" ]; then
-		source_runtime="$APPDIR/$runtime_core_name"
-	elif [ -f "$script_dir/$runtime_core_name" ]; then
-		source_runtime="$script_dir/$runtime_core_name"
-	fi
-
-	if [ -z "$source_runtime" ]; then
-		echo "Fatal: missing $runtime_core_name" >&2
-		exit 1
-	fi
-
-	if [ ! -f "$runtime_core_path" ] || ! cmp -s "$source_runtime" "$runtime_core_path"; then
-		cp "$source_runtime" "$runtime_core_path"
-	fi
-
-	# shellcheck disable=SC1090
-	source "$runtime_core_path" || {
-		echo "Fatal: failed to source $runtime_core_path" >&2
-		exit 1
-	}
+    local script_dir source_runtime="" launcher_path
+    launcher_path="$(readlink -f -- "${BASH_SOURCE[0]}" 2>/dev/null)"
+    [ -n "$launcher_path" ] || launcher_path="${BASH_SOURCE[0]}"
+    script_dir="$(cd -- "$(dirname -- "$launcher_path")" && pwd -P)" || exit 1
+    export JSF_EXEC_DIR="$script_dir"
+    app_name="JS-Forge"
+    app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
+    runtime_core_name="runtime-core.lib"
+    runtime_core_path="$app_data_dir/$runtime_core_name"
+    mkdir -p "$app_data_dir" || exit 1
+    if [ -f "$script_dir/$runtime_core_name" ]; then
+        source_runtime="$script_dir/$runtime_core_name"
+    elif [ -n "$APPDIR" ] && [ -f "$APPDIR/$runtime_core_name" ]; then
+        source_runtime="$APPDIR/$runtime_core_name"
+    fi
+    if [ -z "$source_runtime" ]; then
+        echo "Fatal: missing $runtime_core_name beside $launcher_path or in APPDIR." >&2
+        exit 1
+    fi
+    export JSF_BUNDLE_DIR
+    JSF_BUNDLE_DIR="$(cd -- "$(dirname -- "$source_runtime")" && pwd -P)" || exit 1
+    JSF_LAUNCH_APPDIR="${APPDIR:-}"
+    export APPDIR="$JSF_BUNDLE_DIR"
+    if [ ! -f "$runtime_core_path" ] || ! cmp -s "$source_runtime" "$runtime_core_path"; then
+        cp -- "$source_runtime" "$runtime_core_path" || exit 1
+    fi
+    source "$runtime_core_path" || {
+        echo "Fatal: failed to source $runtime_core_path" >&2
+        exit 1
+    }
 }
 
 variables() {
@@ -52,12 +50,14 @@ variables() {
 
 	app_ver_major="1"
 	app_ver_minor="2"
-	app_ver_build="0"
+	app_ver_build="1"
 	app_ver_stage="beta"
-	app_ver_build_date="built on 8/11/2026"
+	app_ver_build_date="built on 2026-10-31"
 	probe_name="System"
 
+	gitengine_ext_loaded="0" # Only a loaded extension may expose GitEngine.
 	allow_user_extensions="0"
+	allow_raw_tty="0" # 0 = blocked; 1 = allowed using the headless profile
 	exit_override="0"
 
 	# =============================================================================
@@ -93,7 +93,8 @@ variables() {
 
 	app_temp_loc="/tmp/$app_name"
 	#app_install_loc="$HOME/.local/bin"
-	app_script_folder_loc="$HOME/.$app_name"
+	app_script_folder_loc="$HOME/.$app_name" # GitEngine scripts only
+	bundled_script_root="${JSF_BUNDLE_DIR:-$JSF_EXEC_DIR}/Linux-Control-Panel"
 	app_data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 	runtime_core_name="runtime-core.lib"
 	runtime_core_path="$app_data_dir/$runtime_core_name"
@@ -103,7 +104,7 @@ variables() {
 	# SYSTEM INFORMATION
 	# =============================================================================
 
-	current_user="$whoami"
+	current_user="$(whoami)"
 
 	declare -ga xprobe_messages=()
 
@@ -223,8 +224,14 @@ variables() {
 	#local detected_display_server
 	#local detected_desktop_environment
 
-	detected_display_server="$(detect_display_server)"
-	detected_desktop_environment="$(detect_desktop_environment)"
+	jsf_detect_session
+	if [ "$desktop_capable" = "1" ]; then
+		detected_display_server="$(detect_display_server)"
+		detected_desktop_environment="$(detect_desktop_environment)"
+	else
+		detected_display_server="None (current session)"
+		detected_desktop_environment="None ($session_profile)"
+	fi
 	detected_hostname="$(detect_hostname)"
 	detected_lan_ip="$(detect_lan_ip)"
 	detected_init_system="$(detect_init_system)"
@@ -558,7 +565,7 @@ THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMP
 
 	if [ "$tui_flag" = "1" ]; then
 
-		if echo "$eula_text" | less; then
+		if jsf_show_terminal_license; then
 			eula_mark_accepted
 			text_delay
 			clear
@@ -672,7 +679,7 @@ run_selected_script() {
     local no_pause="0"
 
     selection="$(basename "$full_path")"
-    chmod +x "$full_path" >/dev/null 2>&1
+    # Bundled shell scripts are read-only: use Bash without chmod.
 
     if grep -Eq '^[[:space:]]*jsf_no_pause="1"' "$full_path" 2>/dev/null; then
         no_pause="1"
@@ -687,7 +694,7 @@ run_selected_script() {
     else
         sleep .3
         echo ""
-        "$full_path"
+        bash -- "$full_path"
 
         if [ "$no_pause" != "1" ]; then
             divider
@@ -696,210 +703,218 @@ run_selected_script() {
     fi
 }
 
+# Virtual overlay: physical collection names never appear as menu levels.
+jsf_lcp_relative_path() {
+    case "$1" in
+        @lcp) printf '%s' '' ;;
+        @lcp/*) printf '%s' "${1#@lcp/}" ;;
+        *) return 1 ;;
+    esac
+}
+
+jsf_lcp_sources() {
+    local rel
+    rel="$(jsf_lcp_relative_path "$1")" || return 1
+    jsf_lcp_source_dirs=("$bundled_script_root/headless${rel:+/$rel}")
+    if [ "${desktop_capable:-0}" = "1" ]; then
+        jsf_lcp_source_dirs+=("$bundled_script_root/gui${rel:+/$rel}")
+    fi
+}
+
+jsf_browser_entries() {
+    local node="$1" scan_dir entry name rel ext_key
+    local source_dirs=() sorted_dirs=() sorted_files=() jsf_lcp_source_dirs=()
+    local -A seen_dirs=() script_paths=()
+    browser_labels=(); browser_targets=(); browser_kinds=(); browser_scan_dirs=()
+    browser_script_count=0; browser_content_count=0
+    if [ "$node" = "@main" ]; then
+        browser_labels+=("📁 Linux Control Panel")
+        browser_targets+=("@lcp"); browser_kinds+=("directory")
+        if [ "${gitengine_ext_loaded:-0}" = "1" ]; then
+            browser_labels+=("📁 GitEngine Scripts")
+            browser_targets+=("$app_script_folder_loc"); browser_kinds+=("directory")
+        fi
+        for ext_key in "${ext_menu_order[@]}"; do
+            [ -n "${ext_menu_labels[$ext_key]}" ] || continue
+            browser_labels+=("${ext_menu_labels[$ext_key]}")
+            browser_targets+=("$ext_key"); browser_kinds+=("extension")
+        done
+        browser_labels+=("🪪 About $app_name" "🚪 Exit $app_name")
+        browser_targets+=("@about" "@exit"); browser_kinds+=("action" "action")
+        return 0
+    fi
+    case "$node" in
+        @lcp|@lcp/*)
+            rel="$(jsf_lcp_relative_path "$node")"
+            jsf_lcp_sources "$node"
+            source_dirs=("${jsf_lcp_source_dirs[@]}") ;;
+        *) source_dirs=("$node") ;;
+    esac
+    browser_scan_dirs=("${source_dirs[@]}")
+    for scan_dir in "${source_dirs[@]}"; do
+        [ -d "$scan_dir" ] || continue
+        for entry in "$scan_dir"/*; do
+            [ -e "$entry" ] || continue
+            name="${entry##*/}"
+            [[ "$name" == *$'\n'* ]] && continue
+            if [ -d "$entry" ]; then
+                seen_dirs["$name"]=1
+            elif is_runnable_script "$entry"; then
+                script_paths["$name"]="$entry"
+            fi
+        done
+    done
+    if [ "${#seen_dirs[@]}" -gt 0 ]; then
+        mapfile -t sorted_dirs < <(printf '%s\n' "${!seen_dirs[@]}" | LC_ALL=C sort)
+    fi
+    if [ "${#script_paths[@]}" -gt 0 ]; then
+        mapfile -t sorted_files < <(printf '%s\n' "${!script_paths[@]}" | LC_ALL=C sort)
+    fi
+    for name in "${sorted_dirs[@]}"; do
+        browser_labels+=("📁 $name")
+        case "$node" in
+            @lcp|@lcp/*) browser_targets+=("@lcp/${rel:+$rel/}$name") ;;
+            *) browser_targets+=("$node/$name") ;;
+        esac
+        browser_kinds+=("directory")
+    done
+    for name in "${sorted_files[@]}"; do
+        browser_labels+=("📄 $name"); browser_targets+=("${script_paths[$name]}")
+        browser_kinds+=("script"); ((browser_script_count+=1))
+    done
+    browser_content_count=${#browser_labels[@]}
+    if [ "${tui_flag:-0}" = "1" ] && [ "$browser_script_count" -gt 0 ]; then
+        browser_labels+=("View Action's Source Code")
+        browser_targets+=("@source"); browser_kinds+=("action")
+    fi
+    if [ "${gui_flag:-0}" != "1" ]; then
+    browser_labels+=("<- Back"); browser_targets+=("@back"); browser_kinds+=("action")
+    fi
+    return 0
+}
+
+jsf_browser_title() {
+    local node="$1" rel
+    case "$node" in
+        @main) printf '%s\n' 'Main Menu' ;;
+        @lcp) printf '%s\n' 'Linux Control Panel' ;;
+        @lcp/*) rel="${node#@lcp/}"; printf 'Linux Control Panel -> %s\n' "${rel//\// -> }" ;;
+        "$app_script_folder_loc") printf '%s\n' 'GitEngine Scripts' ;;
+        "$app_script_folder_loc"/*)
+            rel="${node#"$app_script_folder_loc/"}"
+            printf 'GitEngine Scripts -> %s\n' "${rel//\// -> }" ;;
+        *) printf '%s\n' "$node" ;;
+    esac
+}
+
+jsf_pick_browser_row() {
+    local title="$1" cancel_label="$2" output_name="$3"
+    local chosen_label chosen_index row
+    local gui_rows=()
+    if [ "$gui_flag" = "1" ]; then
+        for ((row=0; row<${#browser_labels[@]}; row++)); do
+            gui_rows+=("$row" "${browser_labels[$row]}")
+        done
+        chosen_index=$(zenity --list --title="$app_name" --text="$title" \
+            --column="ID" --column="Options" --hide-column=1 --print-column=1 \
+            "${gui_rows[@]}" $default_mainmenu_gui_dimensions \
+            --ok-label="Select" --cancel-label="$cancel_label") || return 1
+        [[ "$chosen_index" =~ ^[0-9]+$ ]] || return 1
+        [ "$chosen_index" -lt "${#browser_labels[@]}" ] || return 1
+    else
+        cursor_menu 'Select a menu option:' chosen_label "${browser_labels[@]}" || return 1
+        chosen_index=""
+        for ((row=0; row<${#browser_labels[@]}; row++)); do
+            if [ "$chosen_label" = "${browser_labels[$row]}" ]; then
+                chosen_index=$row; break
+            fi
+        done
+        [ -n "$chosen_index" ] || return 1
+    fi
+    printf -v "$output_name" '%s' "$chosen_index"
+}
+
+jsf_browser_empty_notice() {
+    local node="$1" path message missing=1 paths_text=""
+    for path in "${browser_scan_dirs[@]}"; do
+        [ -d "$path" ] && missing=0
+        printf -v paths_text '%s\n%s' "$paths_text" "$path"
+    done
+    if [ "$missing" = "1" ]; then
+        message="Script directory not found for $(jsf_browser_title "$node")."
+    else
+        message="No immediate subfolders or compatible scripts found for $(jsf_browser_title "$node")."
+    fi
+    message+=$'\n\nChecked directories:'"$paths_text"
+    message+=$'\n\nAccepted script suffixes: .sh and .'"$package_manager"
+    message+=$'\nBundle root: '"$bundled_script_root"
+    message+=$'\nLauncher directory: '"${JSF_EXEC_DIR:-unknown}"
+    message+=$'\nAPPDIR: '"${APPDIR:-unset}"
+    message+=$'\nAPPDIR at launch: '"${JSF_LAUNCH_APPDIR:-unset}"
+    if [ "$gui_flag" = "1" ]; then
+        zenity --info --title="$app_name: Script Browser" --text="$message" $default_messagebox_gui_dimensions
+    else
+        printf '\n%s\n' "$message"; entertocontinue
+    fi
+}
+
 view_script_source() {
-	local dir="$1"
-	local scripts=()
-	local file
-	local selection
-	local full_path=""
-
-	shopt -s nullglob
-
-	for file in "$dir"/*; do
-		if is_runnable_script "$file"; then
-			scripts+=("$(basename "$file")")
-		fi
-	done
-
-	if [ ${#scripts[@]} -eq 0 ]; then
-		if [ "$gui_flag" = "1" ]; then
-			zenity --error --title="$app_name: Notification" \
-				--text="No $app_name compatible files detected in this directory." \
-				$default_messagebox_gui_dimensions
-		else
-			echo "No $app_name compatible files detected in this directory." | center
-			entertocontinue
-		fi
-		return
-	fi
-
-	if [ "$gui_flag" = "1" ]; then
-		selection=$(zenity --list --column="Scripts" "${scripts[@]}" \
-			"<- Back" \
-			$default_mainmenu_gui_dimensions \
-			--title="$app_name: View Source" \
-			--ok-label="Open" \
-			--cancel-label="<- Back")
-		[ $? -ne 0 ] && return
-	else
-		cursor_menu " " selection "${scripts[@]}" "<- Back"
-	fi
-
-	[ "$selection" = "<- Back" ] && return
-
-	full_path="$dir/$selection"
-
-	if [[ ! -f "$full_path" ]]; then
-		if [ "$gui_flag" = "1" ]; then
-			zenity --error --text="Error: Could not find the full path for $selection."
-		else
-			echo "
-Error: Could not find the full path for $selection.
-" | center
-			entertocontinue
-		fi
-		return
-	fi
-
-	nano "$full_path"
+    local node="$1" row selected_row
+    local browser_labels=() browser_targets=() browser_kinds=() browser_scan_dirs=()
+    local browser_script_count=0 browser_content_count=0 source_labels=() source_targets=()
+    jsf_browser_entries "$node"
+    for ((row=0; row<${#browser_kinds[@]}; row++)); do
+        [ "${browser_kinds[$row]}" = "script" ] || continue
+        source_labels+=("${browser_labels[$row]}"); source_targets+=("${browser_targets[$row]}")
+    done
+    [ "${#source_labels[@]}" -gt 0 ] || return 0
+    if [ "${gui_flag:-0}" != "1" ]; then
+    source_labels+=("<- Back"); source_targets+=("@back")
+    fi
+    browser_labels=("${source_labels[@]}")
+    jsf_pick_browser_row "$(jsf_browser_title "$node") -> View Source" '<- Back' selected_row || return
+    [ "${source_targets[$selected_row]}" = "@back" ] && return
+    case "${source_targets[$selected_row]}" in
+        "$bundled_script_root"/*) nano --view "${source_targets[$selected_row]}" ;;
+        *) nano "${source_targets[$selected_row]}" ;;
+    esac
 }
 
 browse_menu() {
-	local dir="$1"
-	local root="$2"
-	local selection
-	local entries=()
-	local subdirs=()
-	local scripts=()
-	local item
-	local rel_path
-
-	shopt -s nullglob
-
-	while true; do
-		subdirs=()
-		scripts=()
-		entries=()
-
-		for item in "$dir"/*; do
-			[[ -d "$item" ]] && subdirs+=("📁 ${item##*/}")
-		done
-
-		for item in "$dir"/*; do
-			if is_runnable_script "$item"; then
-				scripts+=("📄 $(basename "$item")")
-			fi
-		done
-
-		entries+=("${subdirs[@]}")
-		entries+=("${scripts[@]}")
-
-		if [ "$dir" = "$root" ]; then
-			local ext_key
-
-			for ext_key in "${ext_menu_order[@]}"; do
-				[ -n "${ext_menu_labels[$ext_key]}" ] || continue
-				entries+=("${ext_menu_labels[$ext_key]}")
-			done
-
-			entries+=("🪪 About $app_name")
-			entries+=("🚪 Exit $app_name")
-		else
-			if [ "$tui_flag" = "1" ]; then
-				entries+=("View Action's Source Code" "<- Back")
-			fi
-		fi
-
-		if [ ${#subdirs[@]} -eq 0 ] && [ ${#scripts[@]} -eq 0 ] && [ "$dir" != "$root" ]; then
-			if [ "$gui_flag" = "1" ]; then
-				zenity --error --title="$app_name: Notification" \
-					--text="No $app_name compatible files detected in this directory." \
-					$default_messagebox_gui_dimensions
-			else
-				echo "No $app_name compatible files detected in this directory." | center
-				entertocontinue
-			fi
-			return
-		fi
-
-		clear && printf '\e[3J'
-		jsforge_banner
-		echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
-
-		rel_path="${dir#$root}"
-		rel_path="${rel_path#/}"
-		local zenity_text
-
-		if [ -z "$rel_path" ]; then
-			zenity_text="Main Menu"
-		else
-			zenity_text="$(printf 'Main Menu\n%s' "${rel_path//\// -> }")"
-		fi
-
-		echo "$zenity_text" | center
-		divider
-		echo "
-Select a menu option:" | center
-
-		if [ "$gui_flag" = "1" ]; then
-			selection=$(zenity --list \
-				--title="$app_name" \
-				--text="$zenity_text" \
-				--column="Options" "${entries[@]}" \
-				$default_mainmenu_gui_dimensions \
-				--ok-label="Select" \
-				--cancel-label="$([ "$dir" = "$root" ] && echo "Exit" || echo "<- Back")")
-			exit_code=$?
-			if [ "$exit_code" -ne 0 ]; then
-				if [ "$dir" = "$root" ]; then
-					exit_override="1"
-					return
-				else
-					return
-				fi
-			fi
-		else
-			cursor_menu " " selection "${entries[@]}"
-		fi
-
-		local ext_key
-
-		for ext_key in "${ext_menu_order[@]}"; do
-			if [ "$selection" = "${ext_menu_labels[$ext_key]}" ]; then
-				"${ext_menu_actions[$ext_key]}"
-				continue 2
-			fi
-		done
-
-		case "$selection" in
-		"🪪 About $app_name")
-			credits
-			;;
-		"View Action's Source Code")
-			view_script_source "$dir"
-			;;
-		"<- Back")
-			return
-			;;
-		"🚪 Exit $app_name")
-			exit_override="1"
-			return
-			;;
-		"📁 "*)
-			browse_menu "$dir/${selection#📁 }" "$root"
-			;;
-
-		"📄 "*)
-			local script_name="${selection#📄 }"
-			if [[ -f "$dir/$script_name" ]]; then
-				run_selected_script "$dir/$script_name"
-			else
-				if [ "$gui_flag" = "1" ]; then
-					zenity --error --text="Error: Could not find the full path for $script_name."
-				else
-					echo "
-Error: Could not find the full path for $script_name.
-" | center
-					entertocontinue
-				fi
-			fi
-			;;
-
-		*)
-			...
-			;;
-		esac
-	done
+    local node="$1" root="${2:-@main}" selected_row target kind title cancel_label
+    local browser_labels=() browser_targets=() browser_kinds=() browser_scan_dirs=()
+    local browser_script_count=0 browser_content_count=0
+    while true; do
+        jsf_browser_entries "$node"
+        title="$(jsf_browser_title "$node")"
+        if [ "$node" != "@main" ] && [ "$browser_content_count" -eq 0 ]; then
+            jsf_browser_empty_notice "$node"; return
+        fi
+        cancel_label='<- Back'
+        [ "$node" = "@main" ] && cancel_label='Exit'
+        if [ "$tui_flag" = "1" ]; then
+            clear; jsforge_banner
+            echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
+            printf '%s\n' "$title" | center; divider
+        fi
+        if ! jsf_pick_browser_row "$title" "$cancel_label" selected_row; then
+            [ "$node" = "@main" ] && exit_override="1"
+            return
+        fi
+        target="${browser_targets[$selected_row]}"; kind="${browser_kinds[$selected_row]}"
+        case "$kind" in
+            directory) browse_menu "$target" "$root" ;;
+            script) run_selected_script "$target" ;;
+            extension) "${ext_menu_actions[$target]}" ;;
+            action)
+                case "$target" in
+                    @exit) exit_override="1"; return ;;
+                    @back) return ;;
+                    @about) credits ;;
+                    @source) view_script_source "$node" ;;
+                esac ;;
+        esac
+    done
 }
 
 # =============================================================================
@@ -910,8 +925,8 @@ Error: Could not find the full path for $script_name.
 if [ "$1" == -s ]; then
 
 	clear
-	variables
 	bootstrap_runtime_core
+	variables
 	jsf_init_runtime_core
 	jsforge_banner
 	echo "$app_name $app_ver_major.$app_ver_minor.$app_ver_build $app_ver_stage" | center
@@ -935,8 +950,8 @@ fi
 # Main Startup Switch
 if [ "$1" == "" ]; then
 
-	variables
 	bootstrap_runtime_core
+	variables
 	jsf_init_runtime_core
 	
 	# No zenity installed warning message GUI
@@ -949,12 +964,14 @@ if [ "$1" == "" ]; then
 
 	if [ "$gui_flag" = "1" ]; then
 		# Send progress updates to Zenity on a separate file descriptor
-		exec 3> >(zenity --progress --pulsate --auto-close --text="Running $probe_name..." --title="$app_name: $probe_name Analysis" $default_loading_gui_dimensions --no-cancel)
-		echo "# scanning system..." >&3
+		exec {jsf_progress_fd}> >(zenity --progress --pulsate --auto-close --text="Running $probe_name..." --title="$app_name: $probe_name Analysis" $default_loading_gui_dimensions --no-cancel)
+		jsf_progress_pid=$!
+		echo "# scanning system..." >&"$jsf_progress_fd"
 		load_extensions
-		echo "100" >&3
-		exec 3>&-                                                                                                                                      # Close fd
-		printf '%s\n' "${xprobe_messages[@]}" | zenity --text-info --title="$app_name: $probe_name Report" --timeout=3 $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label=""
+		echo "100" >&"$jsf_progress_fd"
+		exec {jsf_progress_fd}>&-
+		wait "$jsf_progress_pid" || :
+		printf '%s\n' "${xprobe_messages[@]}" | zenity --text-info --title="$app_name: $probe_name Report" --timeout=2 $default_mainmenu_gui_dimensions #--ok-label="" --cancel-label=""
 		#exit
 	else
 		clear
@@ -968,7 +985,7 @@ if [ "$1" == "" ]; then
 
 	fi
 
-	browse_menu "$app_script_folder_loc" "$app_script_folder_loc"
+	browse_menu "@main" "@main"
 
 	exit_override="1"
 
@@ -985,8 +1002,8 @@ if [ "$1" == "-t" ]; then
 
 	clear
 
-	variables
 	bootstrap_runtime_core
+	variables
 	jsf_init_runtime_core
 
 	SCRIPT_PATH="$(readlink -f "$0")"

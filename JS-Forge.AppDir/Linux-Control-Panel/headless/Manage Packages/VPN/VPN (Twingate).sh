@@ -1,0 +1,837 @@
+#!/bin/bash
+jsf_no_pause="1"
+
+app_name="JS-Forge"
+runtime_core_path="${JSF_RUNTIME_CORE_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/runtime-core.lib}"
+
+source "$runtime_core_path" || {
+	echo "Fatal: failed to source JS-Forge runtime: $runtime_core_path" >&2
+	exit 1
+}
+
+jsf_init_runtime_core
+jsf_require_all --native curl jq
+
+script_title="Twingate JSF Client"
+twingate_dir="/etc/twingate"
+twingate_key_path="$twingate_dir/service_key.json"
+twingate_state_path="$twingate_dir/jsf-travel-access.json"
+twingate_container_name="twingate-jsf-client"
+twingate_image="docker.io/twingate/client:latest"
+twingate_runtime=""
+twingate_last_error=""
+twingate_launcher_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+twingate_launcher_path="$twingate_launcher_dir/js-forge-twingate-client.desktop"
+twingate_tray_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/JS-Forge"
+twingate_tray_config_path="$twingate_tray_config_dir/twingate-yad-tray.conf"
+twingate_tray_state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/JS-Forge"
+twingate_tray_pid_path="$twingate_tray_state_dir/twingate-yad-tray.pid"
+twingate_tun_modules_file="/etc/modules-load.d/jsf-twingate.conf"
+
+pause_screen() {
+	echo ""
+	entertocontinue
+}
+run_as_root() { if [ "$EUID" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+device_files_exist() { run_as_root test -r "$twingate_key_path" && run_as_root test -r "$twingate_state_path"; }
+require_device() { device_files_exist || {
+	echo "This computer has not been set up for Twingate Travel Access yet."
+	return 1
+}; }
+
+require_runtime() {
+	if command -v podman >/dev/null 2>&1; then
+		twingate_runtime="podman"
+		return 0
+	fi
+	if command -v docker >/dev/null 2>&1; then
+		twingate_runtime="docker"
+		return 0
+	fi
+	echo "Podman or Docker is required, but neither was found."
+	echo "Install one container runtime with the dedicated JS-Forge installer, then try again."
+	return 1
+}
+
+runtime_cmd() { run_as_root "$twingate_runtime" "$@"; }
+
+choose() {
+	local prompt="$1" result_var="$2"
+	shift 2
+	cursor_menu "$prompt" "$result_var" "$@"
+}
+
+read_state() {
+	local state
+	state="$(run_as_root cat "$twingate_state_path" 2>/dev/null)" || return 1
+	twingate_tenant="$(printf '%s' "$state" | jq -r '.tenant // empty')"
+	twingate_device_name="$(printf '%s' "$state" | jq -r '.deviceName // empty')"
+	twingate_service_account_id="$(printf '%s' "$state" | jq -r '.serviceAccountId // empty')"
+	twingate_service_key_id="$(printf '%s' "$state" | jq -r '.serviceKeyId // empty')"
+	[ -n "$twingate_tenant" ] && [ -n "$twingate_device_name" ] && [ -n "$twingate_service_account_id" ] && [ -n "$twingate_service_key_id" ]
+}
+
+prompt_tenant() {
+	local value
+	while true; do
+		read -r -p "Twingate tenant name: " value
+		value="${value#https://}"
+		value="${value%%.twingate.com*}"
+		case "$value" in "" | *[!A-Za-z0-9-]*) echo "Enter only the tenant subdomain, for example: my-company" ;; *)
+			twingate_tenant="$value"
+			return 0
+			;;
+		esac
+	done
+}
+
+prompt_api_key() {
+	local selection url options=("Open API settings" "Continue without opening" "Cancel")
+	url="https://${twingate_tenant}.twingate.com/settings/api"
+	clear
+	echo "$script_title"
+	divider
+	echo "Create or manage your Twingate Admin API key here:"
+	echo "$url"
+	echo ""
+	choose "What would you like to do?" selection "${options[@]}"
+	case "$selection" in
+	"Open API settings") xdg-open "$url" >/dev/null 2>&1 & ;;
+	"Cancel") return 1 ;;
+	esac
+	echo ""
+	echo "Generate an API key, save it in your password manager, then return here."
+	read -r -s -p "Enter Twingate Admin API key (input hidden): " twingate_admin_api_key
+	printf '\n'
+	[ -n "$twingate_admin_api_key" ] || {
+		echo "No API key was entered."
+		return 1
+	}
+}
+
+choose_expiration() {
+	local selection options=("No expiration" "30 days" "90 days" "365 days" "Enter a custom number" "Cancel")
+	choose "Choose Service Key expiration:" selection "${options[@]}"
+	case "$selection" in
+	"No expiration") twingate_key_expiration=0 ;; "30 days") twingate_key_expiration=30 ;; "90 days") twingate_key_expiration=90 ;; "365 days") twingate_key_expiration=365 ;;
+	"Enter a custom number")
+		read -r -p "Expiration in days, 0 through 365: " twingate_key_expiration
+		case "$twingate_key_expiration" in "" | *[!0-9]*) return 1 ;; esac
+		[ "$twingate_key_expiration" -le 365 ] || return 1
+		;;
+	*) return 1 ;;
+	esac
+}
+
+api_call() {
+	local query="$1" variables="$2" payload
+	payload="$(jq -n --arg query "$query" --argjson variables "$variables" '{query:$query,variables:$variables}')" || return 1
+	curl --silent --show-error --fail-with-body --connect-timeout 15 --max-time 45 -H "Content-Type: application/json" -H "X-API-KEY: $twingate_admin_api_key" --data "$payload" "https://${twingate_tenant}.twingate.com/api/graphql/"
+}
+
+mutation() {
+	local field="$1" query="$2" variables="$3" response ok
+	response="$(api_call "$query" "$variables")" || {
+		twingate_last_error="Unable to contact the Twingate API."
+		return 1
+	}
+	ok="$(printf '%s' "$response" | jq -r ".data.${field}.ok // false")"
+	[ "$ok" = true ] && {
+		twingate_response="$response"
+		return 0
+	}
+	twingate_last_error="$(printf '%s' "$response" | jq -r '.errors[0].message // .data[]?.error // "Unknown Twingate API error"')"
+	return 1
+}
+
+remote_missing() { case "${twingate_last_error,,}" in *not\ found* | *does\ not\ exist* | *not\ exist*) return 0 ;; *) return 1 ;; esac }
+
+create_account() {
+	local q='mutation serviceAccountCreate($name:String!,$resourceIds:[ID]){serviceAccountCreate(name:$name,resourceIds:$resourceIds){ok error entity{id}}}' v
+	v="$(jq -n --arg name "$twingate_device_name" '{name:$name,resourceIds:[]}')"
+	mutation serviceAccountCreate "$q" "$v" || {
+		echo "Twingate API error: $twingate_last_error"
+		return 1
+	}
+	twingate_service_account_id="$(printf '%s' "$twingate_response" | jq -r '.data.serviceAccountCreate.entity.id // empty')"
+	[ -n "$twingate_service_account_id" ]
+}
+
+create_key() {
+	local name="$1" q='mutation serviceAccountKeyCreate($expirationTime:Int!,$name:String,$serviceAccountId:ID!){serviceAccountKeyCreate(expirationTime:$expirationTime,name:$name,serviceAccountId:$serviceAccountId){ok error entity{id} token}}' v
+	v="$(jq -n --argjson expirationTime "$twingate_key_expiration" --arg name "$name" --arg serviceAccountId "$twingate_service_account_id" '{expirationTime:$expirationTime,name:$name,serviceAccountId:$serviceAccountId}')"
+	mutation serviceAccountKeyCreate "$q" "$v" || {
+		echo "Twingate API error: $twingate_last_error"
+		return 1
+	}
+	twingate_service_key_id="$(printf '%s' "$twingate_response" | jq -r '.data.serviceAccountKeyCreate.entity.id // empty')"
+	twingate_service_key_token="$(printf '%s' "$twingate_response" | jq -r '.data.serviceAccountKeyCreate.token // empty')"
+	[ -n "$twingate_service_key_id" ] && printf '%s' "$twingate_service_key_token" | jq -e 'type=="object"' >/dev/null
+}
+
+write_files() {
+	local key_tmp state_tmp result
+	key_tmp="$(mktemp)"
+	state_tmp="$(mktemp)" || {
+		rm -f "$key_tmp"
+		return 1
+	}
+	printf '%s\n' "$twingate_service_key_token" >"$key_tmp"
+	jq -n --arg tenant "$twingate_tenant" --arg deviceName "$twingate_device_name" --arg serviceAccountId "$twingate_service_account_id" --arg serviceKeyId "$twingate_service_key_id" '{tenant:$tenant,deviceName:$deviceName,serviceAccountId:$serviceAccountId,serviceKeyId:$serviceKeyId}' >"$state_tmp"
+	run_as_root install -d -m 700 "$twingate_dir" && run_as_root install -o root -g root -m 600 "$key_tmp" "$twingate_key_path" && run_as_root install -o root -g root -m 600 "$state_tmp" "$twingate_state_path"
+	result=$?
+	rm -f "$key_tmp" "$state_tmp"
+	return "$result"
+}
+
+ensure_tun_device() {
+	echo "Ensuring the tun kernel module is loaded..."
+
+	if command -v modprobe >/dev/null 2>&1; then
+		if ! run_as_root modprobe tun; then
+			if [ ! -c /dev/net/tun ]; then
+				echo "Could not load the tun kernel module."
+				return 1
+			fi
+
+			echo "The tun module could not be loaded, but /dev/net/tun exists."
+		fi
+	fi
+
+	if [ ! -c /dev/net/tun ]; then
+		echo "Twingate requires /dev/net/tun, but it is unavailable."
+		echo "Try: sudo modprobe tun"
+		return 1
+	fi
+
+	echo "TUN device is ready."
+	return 0
+}
+
+enable_persistent_tun_support() {
+	if [ "$(jsf_detect_distro_family)" != "suse" ]; then
+		echo "Persistent TUN boot configuration is currently provided only for openSUSE."
+		return 1
+	fi
+
+	echo "Configuring the tun kernel module to load automatically at boot..."
+
+	if ! printf 'tun\n' | run_as_root tee "$twingate_tun_modules_file" >/dev/null; then
+		echo "Could not create: $twingate_tun_modules_file"
+		return 1
+	fi
+
+	if ! run_as_root modprobe tun; then
+		echo "The boot configuration was created, but tun could not be loaded now."
+		return 1
+	fi
+
+	if grep -qw tun /proc/misc; then
+		echo "Persistent TUN support is enabled."
+		echo "The tun module will load automatically after future reboots."
+		return 0
+	fi
+
+	echo "The configuration file was created, but the TUN driver is not currently available."
+	return 1
+}
+
+disable_persistent_tun_support() {
+	if [ "$(jsf_detect_distro_family)" != "suse" ]; then
+		echo "Persistent TUN boot configuration is currently provided only for openSUSE."
+		return 1
+	fi
+
+	if run_as_root rm -f "$twingate_tun_modules_file"; then
+		echo "Persistent TUN boot configuration was removed."
+		echo "The currently loaded tun module was left alone."
+	else
+		echo "Could not remove: $twingate_tun_modules_file"
+		return 1
+	fi
+}
+
+show_persistent_tun_status() {
+	if [ "$(jsf_detect_distro_family)" != "suse" ]; then
+		echo "Persistent TUN boot configuration: not applicable on this distro."
+		return 0
+	fi
+
+	if run_as_root test -f "$twingate_tun_modules_file"; then
+		echo "Persistent TUN boot configuration: enabled"
+		echo "File: $twingate_tun_modules_file"
+	else
+		echo "Persistent TUN boot configuration: disabled"
+	fi
+
+	if grep -qw tun /proc/misc; then
+		echo "TUN driver: currently loaded"
+	else
+		echo "TUN driver: not currently loaded"
+	fi
+}
+
+start_client() {
+	local container_args=()
+
+	require_runtime && require_device && ensure_tun_device || return 1
+	runtime_cmd rm -f "$twingate_container_name" >/dev/null 2>&1 || true
+
+	container_args=(
+		-d
+		--name "$twingate_container_name"
+		--network host
+	)
+
+	case "$(jsf_detect_distro_family)" in
+	suse|opensuse)
+		container_args+=(
+			--device /dev/net/tun:/dev/net/tun
+			--cap-add NET_ADMIN
+			--security-opt label=disable
+			-v "$twingate_key_path:/etc/twingate/service_key.json:ro,Z"
+		)
+		echo "Using the container compatibility profile."
+		;;
+	*)
+		container_args+=(
+			--device /dev/net/tun
+			--cap-add NET_ADMIN
+			-v "$twingate_key_path:/etc/twingate/service_key.json:ro"
+		)
+		;;
+	esac
+
+	runtime_cmd run "${container_args[@]}" "$twingate_image" || {
+		echo "The Twingate Client container could not be started."
+		return 1
+	}
+
+	start_tray_indicator
+	echo "Twingate Client started with $twingate_runtime."
+}
+
+stop_client() {
+	require_runtime || return 1
+
+	if runtime_cmd stop "$twingate_container_name" >/dev/null 2>&1; then
+		echo "Twingate Client stopped."
+	else
+		echo "No running Twingate Client container was found."
+	fi
+
+	stop_tray_indicator
+}
+show_logs() { require_runtime && runtime_cmd logs --tail 80 "$twingate_container_name"; }
+
+show_status() {
+	require_runtime || return 1
+	echo "Container runtime: $twingate_runtime"
+	if device_files_exist && read_state; then
+		echo "Tenant: $twingate_tenant"
+		echo "Device identity: $twingate_device_name"
+		echo "Service Account ID: $twingate_service_account_id"
+	else echo "Local device state: not configured"; fi
+	runtime_cmd ps -a --filter "name=^/${twingate_container_name}$" --format 'Container: {{.Names}} | State: {{.State}} | Status: {{.Status}}' 2>/dev/null || true
+}
+
+live_status() {
+	local key
+	local container_state
+	local started_at
+	local recent_logs
+
+	require_runtime || return 1
+
+	while true; do
+		clear
+		echo "$script_title — Live Status"
+		divider
+
+		if device_files_exist && read_state; then
+			echo "Tenant: $twingate_tenant"
+			echo "Device identity: $twingate_device_name"
+			echo "Service Key: present"
+		else
+			echo "Local device state: not configured"
+		fi
+
+		echo "Runtime: $twingate_runtime"
+
+		container_state="$(runtime_cmd inspect \
+			--format '{{.State.Status}}' \
+			"$twingate_container_name" 2>/dev/null || echo "not created")"
+
+		started_at="$(runtime_cmd inspect \
+			--format '{{.State.StartedAt}}' \
+			"$twingate_container_name" 2>/dev/null || echo "—")"
+
+		echo "Container: $twingate_container_name"
+		echo "State: $container_state"
+		echo "Started: $started_at"
+
+		divider
+		echo "Recent Client activity:"
+		recent_logs="$(runtime_cmd logs --tail 5 "$twingate_container_name" 2>&1)"
+
+		if [ -n "$recent_logs" ]; then
+			printf '%s\n' "$recent_logs"
+		else
+			echo "No Client logs are available yet."
+		fi
+
+		divider
+		echo "Refreshes every 2 seconds. Press Q to return."
+
+		IFS= read -r -s -n 1 -t 2 key || true
+
+		case "$key" in
+		q | Q)
+			return 0
+			;;
+		esac
+	done
+}
+
+revoke_key() { mutation serviceAccountKeyRevoke 'mutation serviceAccountKeyRevoke($id:ID!){serviceAccountKeyRevoke(id:$id){ok error}}' "$(jq -n --arg id "$1" '{id:$id}')"; }
+delete_key() { mutation serviceAccountKeyDelete 'mutation serviceAccountKeyDelete($id:ID!){serviceAccountKeyDelete(id:$id){ok error}}' "$(jq -n --arg id "$1" '{id:$id}')"; }
+delete_account() { mutation serviceAccountDelete 'mutation serviceAccountDelete($id:ID!){serviceAccountDelete(id:$id){ok error}}' "$(jq -n --arg id "$1" '{id:$id}')"; }
+remote_step() {
+	local label="$1"
+	shift
+	"$@" && {
+		echo "$label: complete"
+		return 0
+	}
+	remote_missing && {
+		echo "$label: already absent"
+		return 0
+	}
+	echo "$label: $twingate_last_error"
+	return 1
+}
+
+local_cleanup() {
+	stop_tray_indicator
+	require_runtime || return 1
+	runtime_cmd rm -f "$twingate_container_name" >/dev/null 2>&1 || true
+	run_as_root rm -f "$twingate_key_path" "$twingate_state_path"
+	echo "Local Twingate container and files were removed."
+}
+
+setup_device() {
+	require_runtime || return 1
+	device_files_exist && {
+		echo "This computer already has local Twingate Travel Access files."
+		return 1
+	}
+	twingate_device_name="$(hostname)"
+	echo "Device identity: $twingate_device_name"
+	prompt_tenant && prompt_api_key && choose_expiration || return 1
+	echo "Creating Service Account..."
+	create_account || return 1
+	echo "Creating Service Key..."
+	create_key "$twingate_device_name-key" || return 1
+	write_files || return 1
+	unset twingate_admin_api_key twingate_service_key_token
+	start_client && echo "Twingate Travel Access is ready. Assign Resources in Twingate Admin."
+}
+
+replace_key() {
+	local selection old options=("Cancel" "Create replacement key")
+	require_device && read_state || return 1
+	choose "Replace this computer's device key?" selection "${options[@]}"
+	[ "$selection" = "Create replacement key" ] || return 0
+	old="$twingate_service_key_id"
+	prompt_api_key && choose_expiration || return 1
+	create_key "$twingate_device_name-key-$(date +%Y%m%d%H%M%S)" && write_files && start_client || return 1
+	remote_step "Previous Service Key revocation" revoke_key "$old" || echo "The old key remains active; revoke it manually if needed."
+	unset twingate_admin_api_key twingate_service_key_token
+}
+
+remove_device() {
+	local selection failed=0 options=("Cancel" "Remove remote identity and local files" "Remove local files only")
+	require_device && read_state || {
+		echo "Local state is incomplete. Use local-only removal."
+		return 1
+	}
+	choose "Choose removal behavior:" selection "${options[@]}"
+	[ "$selection" = "Remove local files only" ] && {
+		local_cleanup
+		return
+	}
+	[ "$selection" = "Remove remote identity and local files" ] || return 0
+	prompt_api_key || return 1
+	remote_step "Service Key revocation" revoke_key "$twingate_service_key_id" || failed=1
+	remote_step "Service Key deletion" delete_key "$twingate_service_key_id" || failed=1
+	remote_step "Service Account deletion" delete_account "$twingate_service_account_id" || failed=1
+	if [ "$failed" -ne 0 ]; then
+		options=("Keep local files" "Remove local files anyway")
+		choose "Remote cleanup was incomplete. What now?" selection "${options[@]}"
+		[ "$selection" = "Remove local files anyway" ] || return 1
+	fi
+	local_cleanup
+	unset twingate_admin_api_key
+}
+
+remove_local_only() {
+	local selection options=("Cancel" "Remove local Twingate files")
+	choose "This will not change anything in Twingate Admin." selection "${options[@]}"
+	[ "$selection" = "Remove local Twingate files" ] && local_cleanup
+}
+
+open_admin() {
+	if device_files_exist && read_state; then
+		:
+	else
+		prompt_tenant || return 1
+	fi
+
+	xdg-open "https://${twingate_tenant}.twingate.com/" >/dev/null 2>&1 &
+}
+
+desktop_escape() {
+	printf '%s' "$1" |
+		sed \
+			-e 's/\\/\\\\/g' \
+			-e 's/"/\\"/g' \
+			-e 's/`/\\`/g' \
+			-e 's/\$/\\$/g'
+}
+
+current_script_path() {
+	local source_path="${BASH_SOURCE[0]}"
+	local source_dir
+
+	if command -v readlink >/dev/null 2>&1; then
+		readlink -f "$source_path" 2>/dev/null && return 0
+	fi
+
+	source_dir="$(cd -- "$(dirname -- "$source_path")" && pwd -P)" || return 1
+	printf '%s/%s\n' "$source_dir" "$(basename -- "$source_path")"
+}
+
+install_menu_launcher() {
+	local script_path escaped_script_path
+
+	script_path="$(current_script_path)" || {
+		echo "Could not determine the current Twingate script path."
+		return 1
+	}
+
+	[ -f "$script_path" ] || {
+		echo "The current Twingate script was not found: $script_path"
+		return 1
+	}
+
+	escaped_script_path="$(desktop_escape "$script_path")"
+
+	mkdir -p "$twingate_launcher_dir" || {
+		echo "Could not create the application-launcher directory."
+		return 1
+	}
+
+	cat >"$twingate_launcher_path" <<EOF
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=$script_title
+Comment=Manage the JS-Forge Twingate Client
+Exec=bash "$escaped_script_path"
+Icon=network-vpn
+Terminal=true
+Categories=Network;Utility;
+Keywords=Twingate;VPN;Remote;JS-Forge;
+StartupNotify=true
+EOF
+
+	chmod 644 "$twingate_launcher_path"
+
+	if command -v update-desktop-database >/dev/null 2>&1; then
+		update-desktop-database "$twingate_launcher_dir" >/dev/null 2>&1 || true
+	fi
+
+	echo "Application-menu launcher installed or updated."
+	echo "Launcher file: $twingate_launcher_path"
+	echo "It should appear as: $script_title"
+}
+
+remove_menu_launcher() {
+	if tray_indicator_enabled; then
+		echo "Disable tray support before removing the application-menu launcher."
+		return 1
+	fi
+	if [ -f "$twingate_launcher_path" ]; then
+		rm -f "$twingate_launcher_path"
+		echo "Application-menu launcher removed."
+	else
+		echo "No JS-Forge Twingate launcher was installed."
+	fi
+}
+
+tray_indicator_enabled() {
+	[ -r "$twingate_tray_config_path" ] &&
+		grep -Fxq "enabled=1" "$twingate_tray_config_path"
+}
+
+stop_tray_indicator() {
+	local tray_pid
+
+	[ -r "$twingate_tray_pid_path" ] || return 0
+	tray_pid="$(cat "$twingate_tray_pid_path" 2>/dev/null)"
+
+	case "$tray_pid" in
+	"" | *[!0-9]*) ;;
+	*)
+		if ps -p "$tray_pid" -o comm= 2>/dev/null | grep -qx "yad"; then
+			kill "$tray_pid" >/dev/null 2>&1 || true
+		fi
+		;;
+	esac
+
+	rm -f "$twingate_tray_pid_path"
+}
+
+start_tray_indicator() {
+	local tray_action
+
+	tray_indicator_enabled || return 0
+	command -v yad >/dev/null 2>&1 || return 0
+
+	# A tray icon can only exist inside a graphical user session.
+	[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 0
+
+	stop_tray_indicator
+	mkdir -p "$twingate_tray_state_dir" || return 0
+	chmod 700 "$twingate_tray_state_dir" 2>/dev/null || true
+
+	# The menu launcher is installed when tray support is enabled.
+	# gtk-launch opens that existing launcher, including Terminal=true.
+	tray_action="gtk-launch js-forge-twingate-client"
+
+	if ! command -v gtk-launch >/dev/null 2>&1; then
+		tray_action=":"
+	fi
+
+	setsid yad \
+		--notification \
+		--image="network-vpn" \
+		--text="Twingate started by JS-Forge" \
+		--command="$tray_action" \
+		>/dev/null 2>&1 </dev/null &
+
+	printf '%s\n' "$!" >"$twingate_tray_pid_path"
+}
+
+enable_tray_indicator() {
+	if ! command -v yad >/dev/null 2>&1; then
+		echo "YAD is required for the optional tray indicator."
+		echo "Attempting to install YAD from this distribution's package manager..."
+		jsf_require_all --native yad || true
+	fi
+
+	if ! command -v yad >/dev/null 2>&1; then
+		echo "YAD could not be installed. Tray support remains disabled."
+		echo "Twingate itself is unchanged and will continue to work normally."
+		return 1
+	fi
+
+	install_menu_launcher || {
+		echo "The application-menu launcher could not be installed. Tray support remains disabled."
+		return 1
+	}
+
+	mkdir -p "$twingate_tray_config_dir" || return 1
+	chmod 700 "$twingate_tray_config_dir" 2>/dev/null || true
+	printf 'enabled=1\n' >"$twingate_tray_config_path"
+	chmod 600 "$twingate_tray_config_path" 2>/dev/null || true
+
+	echo "Tray support is enabled."
+	echo "The indicator will appear after the next successful Start connection action."
+}
+
+disable_tray_indicator() {
+	stop_tray_indicator
+	rm -f "$twingate_tray_config_path"
+	echo "Tray support is disabled."
+}
+
+show_tray_indicator_status() {
+	if tray_indicator_enabled; then
+		echo "Tray preference: enabled"
+	else
+		echo "Tray preference: disabled"
+	fi
+
+	if command -v yad >/dev/null 2>&1; then
+		echo "YAD: available"
+	else
+		echo "YAD: unavailable"
+	fi
+
+	if [ -r "$twingate_tray_pid_path" ]; then
+		echo "Tray process: recorded (PID $(cat "$twingate_tray_pid_path" 2>/dev/null))"
+	else
+		echo "Tray process: not running"
+	fi
+}
+
+connection_status_menu() {
+    local selection
+    local options=(
+        "Quick status"
+        "Live status"
+        "View connection logs"
+        "Back"
+    )
+
+    while true; do
+        clear
+        echo "$script_title — Connection Status"
+        divider
+
+        choose "Select an option:" selection "${options[@]}"
+
+        case "$selection" in
+        "Quick status") show_status ;;
+        "Live status") live_status ;;
+        "View connection logs") show_logs ;;
+        "Back") return ;;
+        esac
+
+        [ "$selection" = "Back" ] || pause_screen
+    done
+}
+
+
+desktop_integration_menu() {
+    local selection
+    local options=(
+        "Enable tray indicator"
+        "Disable tray indicator"
+        "Check tray indicator status"
+        "Install or update application-menu launcher"
+        "Remove application-menu launcher"
+        "Back"
+    )
+
+    while true; do
+        clear
+        echo "$script_title — Desktop Integration"
+        divider
+
+        choose "Select an option:" selection "${options[@]}"
+
+        case "$selection" in
+        "Enable tray indicator") enable_tray_indicator ;;
+        "Disable tray indicator") disable_tray_indicator ;;
+        "Check tray indicator status") show_tray_indicator_status ;;
+        "Install or update application-menu launcher") install_menu_launcher ;;
+        "Remove application-menu launcher") remove_menu_launcher ;;
+        "Back") return ;;
+        esac
+
+        [ "$selection" = "Back" ] || pause_screen
+    done
+}
+
+
+tun_support_menu() {
+    local selection
+    local options=(
+        "Enable persistent TUN support at boot"
+        "Disable persistent TUN support at boot"
+        "Check persistent TUN support"
+        "Back"
+    )
+
+    while true; do
+        clear
+        echo "$script_title — TUN Support"
+        divider
+
+        choose "Select an option:" selection "${options[@]}"
+
+        case "$selection" in
+        "Enable persistent TUN support at boot") enable_persistent_tun_support ;;
+        "Disable persistent TUN support at boot") disable_persistent_tun_support ;;
+        "Check persistent TUN support") show_persistent_tun_status ;;
+        "Back") return ;;
+        esac
+
+        [ "$selection" = "Back" ] || pause_screen
+    done
+}
+
+
+device_management_menu() {
+    local selection
+    local options=(
+        "Set up this computer"
+        "Replace device key"
+        "Remove this computer"
+        "Remove local Twingate files only"
+        "Back"
+    )
+
+    while true; do
+        clear
+        echo "$script_title — Device Management"
+        divider
+
+        choose "Select an option:" selection "${options[@]}"
+
+        case "$selection" in
+        "Set up this computer") setup_device ;;
+        "Replace device key") replace_key ;;
+        "Remove this computer") remove_device ;;
+        "Remove local Twingate files only") remove_local_only ;;
+        "Back") return ;;
+        esac
+
+        [ "$selection" = "Back" ] || pause_screen
+    done
+}
+
+
+menu() {
+    local selection
+    local options=(
+        "Start connection"
+        "Stop connection"
+        "Connection status"
+        "Desktop integration"
+        "Device management"
+        "TUN support"
+        "Open Twingate Admin"
+        "Exit"
+    )
+
+    while true; do
+        clear
+        echo "$script_title"
+        divider
+
+        choose "Select an option:" selection "${options[@]}"
+
+        case "$selection" in
+        "Start connection") start_client ;;
+        "Stop connection") stop_client ;;
+        "Connection status") connection_status_menu ;;
+        "Desktop integration") desktop_integration_menu ;;
+        "Device management") device_management_menu ;;
+        "TUN support") tun_support_menu ;;
+        "Open Twingate Admin") open_admin ;;
+        "Exit") return ;;
+        esac
+
+        case "$selection" in
+        "Start connection" | "Stop connection" | "Open Twingate Admin")
+            pause_screen
+            ;;
+        esac
+    done
+}
+
+
+menu

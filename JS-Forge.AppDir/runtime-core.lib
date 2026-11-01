@@ -67,7 +67,7 @@ cursor_menu() {
 			((index++))
 		done
 
-		read -s -n3 key
+		read -r -s -n3 key || return 1
 		case "$key" in
 		"$esc[A")
 			((cur--))
@@ -82,12 +82,12 @@ cursor_menu() {
 		echo -en "\e[${count}A"
 	done
 
-	printf -v "$outvar" "${options[$cur]}"
+	printf -v "$outvar" '%s' "${options[$cur]}"
 }
 
 text_delay() {
 
-	sleep .1
+	sleep .05
 
 }
 
@@ -144,6 +144,7 @@ jsf_init_runtime_core() {
 	resolve_extension_dirs
 	jsf_detect_privilege
 	jsf_detect_package_manager
+	jsf_enforce_session
 }
 
 resolve_extension_dirs() {
@@ -283,13 +284,17 @@ jsf_launch_terminal_command() {
 
 jsf_launch_terminal_script() {
 	local full_path="$1"
-	jsf_launch_terminal_command "\"$full_path\"; echo; read -p 'Press enter to continue'"
+	local quoted_path
+	printf -v quoted_path '%q' "$full_path"
+	jsf_launch_terminal_command "bash -- $quoted_path; echo; read -r -p 'Press enter to continue'"
 }
 
 jsf_launch_terminal_script_nopause() {
 	local full_path="$1"
 	local launch_delay="${JSF_LAUNCH_DELAY:-0.2}"
-	jsf_launch_terminal_command "\"$full_path\"; sleep $launch_delay"
+	local quoted_path
+	printf -v quoted_path '%q' "$full_path"
+	jsf_launch_terminal_command "bash -- $quoted_path; sleep $launch_delay"
 }
 
 # =============================================================================
@@ -758,5 +763,109 @@ jsf_install_github_appimage() {
     if [ "$launch" = "1" ]; then
         echo "Launching $app_id..."
         setsid "$appimage_path" >/dev/null 2>&1 < /dev/null &
+    fi
+}
+
+# Session capability is independent of whether the user chose the GUI or TUI.
+jsf_is_ssh_session() {
+    [ -n "${SSH_CONNECTION:-}" ] || [ -n "${SSH_TTY:-}" ] || [ -n "${SSH_CLIENT:-}" ]
+}
+
+jsf_is_raw_console() {
+    jsf_is_ssh_session && return 1
+    local console
+    console="$(tty 2>/dev/null)"
+    [[ "$console" == /dev/tty* || "$console" = /dev/console ]]
+}
+
+jsf_probe_display() {
+    local wayland_socket probe xdisplay
+    if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        case "$WAYLAND_DISPLAY" in
+            /*) wayland_socket="$WAYLAND_DISPLAY" ;;
+            *) wayland_socket="${XDG_RUNTIME_DIR:-/run/user/$UID}/$WAYLAND_DISPLAY" ;;
+        esac
+        [ -S "$wayland_socket" ] && [ -w "$wayland_socket" ] && return 0
+    fi
+    [ -n "${DISPLAY:-}" ] || return 1
+    # Prefer an actual, bounded display query if existing system tools allow it.
+    if command -v timeout >/dev/null 2>&1; then
+        for probe in xdpyinfo xset xprop; do
+            command -v "$probe" >/dev/null 2>&1 || continue
+            case "$probe" in
+                xdpyinfo) timeout 3 xdpyinfo >/dev/null 2>&1 ;;
+                xset) timeout 3 xset q >/dev/null 2>&1 ;;
+                xprop) timeout 3 xprop -root >/dev/null 2>&1 ;;
+            esac
+            return $?
+        done
+    fi
+    # Do not install display-query packages just to classify a session.
+    # Conservative fallback: local X socket plus explicit desktop-session evidence.
+    case "$DISPLAY" in
+        :*|unix:*) xdisplay="${DISPLAY##*:}"; xdisplay="${xdisplay%%.*}" ;;
+        *) return 1 ;;
+    esac
+    [[ "$xdisplay" =~ ^[0-9]+$ ]] || return 1
+    [ -S "/tmp/.X11-unix/X$xdisplay" ] || return 1
+    [ "${XDG_SESSION_TYPE:-}" = "x11" ] ||
+        [ -n "${XDG_CURRENT_DESKTOP:-}${XDG_SESSION_DESKTOP:-}${DESKTOP_SESSION:-}${GDMSESSION:-}" ]
+}
+
+jsf_detect_session() {
+    desktop_capable="0"
+    session_profile="headless"
+    if jsf_is_ssh_session; then
+        session_profile="SSH/headless"
+    elif jsf_is_raw_console; then
+        session_profile="raw console/headless"
+    elif jsf_probe_display; then
+        desktop_capable="1"
+        session_profile="desktop"
+    fi
+    if [ "$desktop_capable" != "1" ]; then
+        gui_flag="0"
+        tui_flag="1"
+    fi
+    export JSF_DESKTOP_CAPABLE="$desktop_capable"
+    export JSF_SESSION_PROFILE="$session_profile"
+}
+
+jsf_enforce_session() {
+    if jsf_is_raw_console && [ "${allow_raw_tty:-0}" != "1" ]; then
+        printf '%s\n' 'Raw Linux console sessions are disabled.' \
+            'Use SSH or a desktop terminal. To opt in, set allow_raw_tty="1" in AppRun.' >&2
+        exit 1
+    fi
+    if [ "$desktop_capable" != "1" ] && ! [ -t 0 ]; then
+        printf '%s\n' 'Headless mode requires an interactive terminal (for SSH, request a PTY).' >&2
+        exit 1
+    fi
+}
+
+jsf_show_terminal_license() {
+    if command -v less >/dev/null 2>&1; then
+        printf '%s\n' "$eula_text" | less
+    else
+        printf '%s\n' "$eula_text"
+        read -r -p 'Press Enter to accept the license, or Ctrl+C to exit: ' _jsf_license_reply
+    fi
+}
+
+jsf_extension_available() {
+    local dir
+    for dir in "${extension_dirs[@]}"; do
+        [ -f "$dir/$1" ] && return 0
+    done
+    return 1
+}
+
+jsf_startup_programs() {
+    # Required in every session, regardless of enabled extensions.
+    printf '%s\n' tput nano whiptail curl jq chsh git
+
+    # Additional requirements for desktop-capable sessions.
+    if [ "${desktop_capable:-0}" = "1" ]; then
+        printf '%s\n' zenity xdg-open flatpak
     fi
 }
