@@ -1,5 +1,7 @@
 # JS-Forge
 
+## Go Forth, And Create!
+
 **Version 1.2.1**
 
 Updated October 31, 2026. The current launcher metadata uses the beta stage.

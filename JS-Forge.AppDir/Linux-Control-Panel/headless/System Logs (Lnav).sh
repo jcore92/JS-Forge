@@ -12,9 +12,6 @@ source "$runtime_core_path" || {
 jsf_init_runtime_core
 
 jsf_require_all \
-  --flatpak io.github.zyedidia.micro \
+  --native lnav \
 
-flatpak run io.github.zyedidia.micro #>/dev/null 2>&1 & setsid
-#disown 2>/dev/null || true
-
-#exit 0
+sudo lnav

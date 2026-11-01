@@ -447,16 +447,26 @@ https://github.com/jcore92"
 	creds3="Description:
 A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow, extension loading, and lightweight environment probing; infused with ghostAPT, Command Center, ENFORCER, and OSTR's DNA combined with AI assistance.
 
-Supported Linux Distributions: MX Linux, Artix Linux, PCLinuxOS, and openSUSE.
-(All other distros will probably work too, esp non-systemd-distros, although any issues will be unsupported as stock repositories anticipate specific OS conditions.)"
+Supported Linux Distributions:
+Full Support
+- MX Linux.
 
-	creds4="Credits & Acknowledgements
-Dedicated to my dog, Maya, because I needed a quicker workflow so I could spend time with you 🐺
+Partial Support
+- Artix Linux, PCLinuxOS, and openSUSE."
+
+	creds4="Credits & Acknowledgements:
+
 ==============================
-jcore92 - Founder/Director/Coder
-Perplexity - Code Advisor/Coder
-Gemini - Code Monkey #2
-Leo - Code Monkey #1"
+
+Dedicated to my dog, Maya, because I needed a quicker workflow so I could spend time with you 🐺
+
+==============================
+
+Founder/Project Lead
+- jcore92
+
+Code Advisor/Coder(s)
+- Perplexity"
 
 	if [ "$gui_flag" = "1" ]; then
 
