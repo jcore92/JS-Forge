@@ -111,6 +111,7 @@ Some features may be unsupported or may not work as expected:
 - Artix Linux
 - PCLinuxOS
 - openSUSE
+- Other distros (zero support)
 
 ## Project layout
 
