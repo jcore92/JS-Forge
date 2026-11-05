@@ -14,4 +14,4 @@ jsf_init_runtime_core
 jsf_require_all \
   --native lnav \
 
-sudo lnav
+sudo lnav -r -c ':config /ui/mouse/mode enabled' "/var/log"
