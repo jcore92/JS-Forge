@@ -35,6 +35,32 @@ At launch, it initializes runtime variables, detects TUI or GUI mode, gathers sy
 
 ## System Requirements
 
+### AppImage Requirement: FUSE
+
+Running the JS-Forge AppImage requires a working FUSE (Filesystem in Userspace)
+setup. This applies to both terminal/SSH and desktop/GUI sessions.
+
+Depending on the AppImage runtime, your distribution may also need the FUSE 2
+compatibility library, even if FUSE 3 is already installed. Package names vary
+by distribution; Debian-based systems commonly provide it as `libfuse2` or
+`libfuse2t64`.
+
+Install the appropriate compatibility library without removing or replacing
+your system's existing FUSE 3 installation.
+
+FUSE must be available before launching the AppImage—JS-Forge's startup
+dependency checks cannot install it if the AppImage cannot mount.
+
+Running directly from the source AppDir or an extracted AppImage does not
+require FUSE to mount JS-Forge.
+
+### Recommended Usage
+
+Run JS-Forge directly from its AppImage to keep bundled files **read-only**.
+Extraction is useful for development or FUSE troubleshooting, but extracted
+files may be writable. Read-only mounting protects the bundle; it does not
+sandbox scripts or prevent changes elsewhere on your system.
+
 ### Terminal / SSH Dependencies
 
 Required in all environments, including desktop sessions:
