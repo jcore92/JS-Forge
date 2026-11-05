@@ -10,6 +10,15 @@ JS-Forge is a Bash application framework, launcher, and workflow automation tool
 
 It is built for people who want to run curated scripts and for builders who want to create Linux tools, automation flows, and utility packs without rebuilding the same Bash infrastructure in every script.
 
+### Requirements
+
+Supported Linux Distributions:
+Full Support
+- MX Linux and LCOS.
+
+Partial Support
+- Artix Linux, PCLinuxOS, and openSUSE.
+
 ## What it does
 
 JS-Forge provides a branded shell application with a startup pipeline, session-aware dependency checks, extension menus, and separate Linux Control Panel and GitEngine Scripts browser roots. Linux Control Panel is bundled with JS-Forge; GitEngine supplies an additional repository-backed script collection.
