@@ -13,6 +13,7 @@ It is built for people who want to run curated scripts and for builders who want
 ### Requirements
 
 Supported Linux Distributions:
+
 Full Support
 - MX Linux and LCOS.
 
