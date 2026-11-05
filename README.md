@@ -10,44 +10,6 @@ JS-Forge is a Bash application framework, launcher, and workflow automation tool
 
 It is built for people who want to run curated scripts and for builders who want to create Linux tools, automation flows, and utility packs without rebuilding the same Bash infrastructure in every script.
 
-## System Requirements
-
-**Terminal/SSH Dependencies**
-|
-(Required Always)
-
-    - tput
-    - nano
-    - whiptail
-    - curl
-    - jq
-    - chsh
-    - git
-###
-**GUI Dependencies** 
-|
-(Everything in Terminal, plus below)
-
-    - zenity
-    - xdg-open
-    - flatpak
-        * Gear Lever — it.mijorus.gearlever
-        * Flatseal — com.github.tchx84.Flatseal
-
-### Supported Linux Distributions:
-
-**Full Support** 
-|
-(All/majority of features have been tested and are working)
-
-    - MX Linux and LCOS.
-###
-**Partial Support** 
-|
-(Not all features supported/working)
-
-    - Artix Linux, PCLinuxOS, and openSUSE.
-
 ## What it does
 
 JS-Forge provides a branded shell application with a startup pipeline, session-aware dependency checks, extension menus, and separate Linux Control Panel and GitEngine Scripts browser roots. Linux Control Panel is bundled with JS-Forge; GitEngine supplies an additional repository-backed script collection.
@@ -70,6 +32,59 @@ At launch, it initializes runtime variables, detects TUI or GUI mode, gathers sy
 - Enabled GitEngine repository-list, clone, pull, and delete workflows for additional script repositories.
 - GitHub release update checks.
 - Emoji/font repair and optional diagnostic warning modules.
+
+## System Requirements
+
+### Terminal / SSH Dependencies
+
+Required in all environments, including desktop sessions:
+
+- `tput`
+- `nano`
+- `whiptail`
+- `curl`
+- `jq`
+- `chsh`
+- `git`
+
+### Desktop / GUI Dependencies
+
+Desktop-capable sessions require everything listed above, plus:
+
+- `zenity`
+- `xdg-open`
+- `flatpak`
+
+Required Flatpak applications:
+
+| Application | Flatpak ID |
+| --- | --- |
+| Gear Lever | `it.mijorus.gearlever` |
+| Flatseal | `com.github.tchx84.Flatseal` |
+
+Desktop dependencies apply to desktop-capable sessions even when using the
+terminal interface. SSH/headless sessions do not require the desktop-only tools
+or Flatpak applications.
+
+Individual scripts may require additional software beyond these startup
+dependencies.
+
+## Supported Linux Distributions
+
+### Full Support
+
+All or most features have been tested and are working:
+
+- MX Linux
+- LCOS
+
+### Partial Support
+
+Some features may be unsupported or may not work as expected:
+
+- Artix Linux
+- PCLinuxOS
+- openSUSE
 
 ## Project layout
 
