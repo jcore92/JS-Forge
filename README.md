@@ -10,15 +10,43 @@ JS-Forge is a Bash application framework, launcher, and workflow automation tool
 
 It is built for people who want to run curated scripts and for builders who want to create Linux tools, automation flows, and utility packs without rebuilding the same Bash infrastructure in every script.
 
-### Requirements
+## System Requirements
 
-Supported Linux Distributions:
+**Terminal/SSH Dependencies**
+|
+(Required Always)
 
-Full Support
-- MX Linux and LCOS.
+    - tput
+    - nano
+    - whiptail
+    - curl
+    - jq
+    - chsh
+    - git
+###
+**GUI Dependencies** 
+|
+(Everything in Terminal, plus below)
 
-Partial Support
-- Artix Linux, PCLinuxOS, and openSUSE.
+    - zenity
+    - xdg-open
+    - flatpak
+        * Gear Lever — it.mijorus.gearlever
+        * Flatseal — com.github.tchx84.Flatseal
+
+### Supported Linux Distributions:
+
+**Full Support** 
+|
+(All/majority of features have been tested and are working)
+
+    - MX Linux and LCOS.
+###
+**Partial Support** 
+|
+(Not all features supported/working)
+
+    - Artix Linux, PCLinuxOS, and openSUSE.
 
 ## What it does
 
