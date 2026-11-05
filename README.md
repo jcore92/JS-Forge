@@ -595,4 +595,4 @@ JS-Forge is best treated as a Bash toolbox platform rather than one large script
 
 JCore Studios & jcore92 maintain JS-Forge and the bundled Linux Control Panel scripts in this repository.
 
-The launcher credits acknowledge Perplexity, Gemini, and Leo for AI assistance and dedicate the project to Maya. Preserve the project's existing MIT license and notices.
+The launcher credits acknowledge Perplexity for AI assistance and dedicate the project to Maya. Preserve the project's existing MIT license and notices.
