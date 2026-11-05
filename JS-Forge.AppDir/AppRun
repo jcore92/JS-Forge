@@ -449,18 +449,13 @@ A Bash-based launcher and script runtime built around a hybrid TUI/GUI workflow,
 
 Supported Linux Distributions:
 Full Support
-- MX Linux.
+- MX Linux and LCOS.
 
 Partial Support
 - Artix Linux, PCLinuxOS, and openSUSE."
 
 	creds4="Credits & Acknowledgements:
-
-==============================
-
 Dedicated to my dog, Maya, because I needed a quicker workflow so I could spend time with you 🐺
-
-==============================
 
 Founder/Project Lead
 - jcore92
