@@ -731,7 +731,7 @@ jsf_install_github_appimage() {
     }
 
     echo "Integrating $app_id with Gear Lever..."
-    flatpak run it.mijorus.gearlever --integrate "$download_path" || {
+    flatpak run it.mijorus.gearlever --integrate "$download_path" --yes || {
         echo "Gear Lever could not integrate $app_id." >&2
         return 1
     }

@@ -269,7 +269,7 @@ SHELL=/bin/bash FZF_DEFAULT_OPTS='' FZF_DEFAULT_OPTS_FILE='' \
     fzf --layout=reverse --border --no-sort --no-multi \
         --delimiter=$'\t' --with-nth=2.. \
         --prompt='Search installed > ' \
-        --header=$'JS-Forge: Installed Software Manager\nType to search | Ctrl+U clear | Esc close | Ctrl+R refresh\nCtrl+E export FULL list | Ctrl+D / double-click: request removal of ONE item\nEnter does nothing. Native entries include libraries; review all manager transactions.' \
+        --header=$'JS-Forge: Terminal Software Uninstaller\nType to search | Ctrl+U clear | Esc close | Ctrl+R refresh\nCtrl+E export FULL list | Ctrl+D / double-click: request removal of ONE item\nEnter does nothing. Native entries include libraries; review all manager transactions.' \
         --bind='enter:ignore' \
         --bind="ctrl-e:execute($export_command)" \
         --bind="ctrl-d:execute($remove_command)+reload($read_command)" \
