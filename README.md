@@ -4,11 +4,13 @@
 
 ### Version 1.2.1
 
-Updated October 31, 2026. The current launcher metadata uses the beta stage.
+Release metadata dated October 31, 2026. The current launcher metadata uses the beta stage. Documentation updated November 7, 2026.
 
 JS-Forge is a Bash application framework, launcher, and workflow automation tool for Linux. It combines a terminal UI, optional Zenity dialogs, environment probing, extension loading, package and Flatpak helpers, Git-backed script intake, and reusable GitHub AppImage installation support.
 
 It is built for people who want to run curated scripts and for builders who want to create Linux tools, automation flows, and utility packs without rebuilding the same Bash infrastructure in every script.
+
+This README is a living document for the current Bash-based build. Collection scripts and their behavior continue to evolve; examples and reported test results are not guarantees of support on every host.
 
 ## What it does
 
@@ -30,6 +32,9 @@ At launch, it initializes runtime variables, detects TUI or GUI mode, gathers sy
 - Terminal-launch helpers for GUI-mode scripts that still need a shell session.
 - Default paused installer behavior and optional no-pause launcher behavior.
 - Enabled GitEngine repository-list, clone, pull, and delete workflows for additional script repositories.
+- Installed-software search, full-inventory export, and a single-selection removal beta.
+- Terminal utilities and audit workflows, including LF, lnav, an OpenSSH server installer, and Lynis auditing with optional export.
+- Script-generated inventory and audit exports under `~/JS-Forge-Exports/`.
 - GitHub release update checks.
 - Emoji/font repair and optional diagnostic warning modules.
 
@@ -56,27 +61,31 @@ require FUSE to mount JS-Forge.
 
 ### Recommended Usage
 
-Run JS-Forge directly from its AppImage to keep bundled files **read-only**.
+Run JS-Forge directly from its AppImage to keep bundled files read-only.
 Extraction is useful for development or FUSE troubleshooting, but extracted
 files may be writable. Read-only mounting protects the bundle; it does not
 sandbox scripts or prevent changes elsewhere on your system.
 
 ### Terminal / SSH Dependencies
 
-Required in all environments, including desktop sessions:
+The minimal headless startup profile checks:
 
 - `tput`
 - `nano`
-- `whiptail`
-- `curl`
-- `jq`
-- `chsh`
-- `git`
+- `curl` and `jq` while the updates extension is enabled.
+- `git` while GitEngine is enabled.
+
+With both extensions enabled in the current configuration, the list is `tput`,
+`nano`, `curl`, `jq`, and `git`. Headless startup does not guarantee `whiptail` or
+`chsh`; scripts that need tools outside this profile must request them explicitly.
 
 ### Desktop / GUI Dependencies
 
-Desktop-capable sessions require everything listed above, plus:
+Desktop-capable sessions retain the terminal toolchain and desktop dependencies,
+including:
 
+- `whiptail`
+- `chsh`
 - `zenity`
 - `xdg-open`
 - `flatpak`
@@ -93,7 +102,8 @@ terminal interface. SSH/headless sessions do not require the desktop-only tools
 or Flatpak applications.
 
 Individual scripts may require additional software beyond these startup
-dependencies.
+dependencies. Request those dependencies through the runtime rather than expanding
+the minimal headless profile for every script.
 
 ## Supported Linux Distributions
 
@@ -102,12 +112,12 @@ dependencies.
 All or most features have been tested and are working:
 
 - MX Linux
-- LCOS
 
 ### Partial Support
 
 Some features may be unsupported or may not work as expected:
 
+- LCOS
 - Artix Linux
 - PCLinuxOS
 - openSUSE
@@ -262,7 +272,7 @@ requirements still apply.
 
 After `AppRun` bootstraps the runtime library, scripts can source it from:
 
-```
+```text
 ${XDG_DATA_HOME:-$HOME/.local/share}/JS-Forge/runtime-core.lib
 ```
 
@@ -276,7 +286,7 @@ ${XDG_DATA_HOME:-$HOME/.local/share}/JS-Forge/runtime-core.lib
 
 Use this as the starting point for a normal JS-Forge script:
 
-```
+```bash
 #!/bin/bash
 
 app_name="JS-Forge"
@@ -296,7 +306,7 @@ jsf_init_runtime_core
 
 Use `--native` when a script needs additional command-line tools or distribution packages.
 
-```
+```bash
 #!/bin/bash
 
 app_name="JS-Forge"
@@ -316,7 +326,7 @@ jsf_require_all --native ffmpeg imagemagick
 
 A larger native dependency list works the same way:
 
-```
+```bash
 jsf_require_all --native git rsync yq curl jq
 ```
 
@@ -326,7 +336,7 @@ The runtime checks each command, maps common command names to distro-specific pa
 
 Use `--flatpak` when a script needs one or more Flatpak application IDs.
 
-```
+```bash
 #!/bin/bash
 
 app_name="JS-Forge"
@@ -344,7 +354,7 @@ jsf_require_all --flatpak org.keepassxc.KeePassXC
 
 Multiple Flatpaks can be requested together:
 
-```
+```bash
 jsf_require_all --flatpak \
     org.keepassxc.KeePassXC \
     com.github.tchx84.Flatseal
@@ -356,7 +366,7 @@ The runtime checks installed user Flatpaks, adds Flathub if needed, and installs
 
 A script can request both native tools and Flatpak applications in one call:
 
-```
+```bash
 #!/bin/bash
 
 app_name="JS-Forge"
@@ -392,7 +402,7 @@ It checks for a previously managed copy, searches `~/AppImages`, queries the lat
 
 ### AppImage example: BleachBit
 
-```
+```bash
 #!/bin/bash
 jsf_no_pause="1"
 
@@ -415,7 +425,7 @@ jsf_install_github_appimage \
 
 ### AppImage example: WireGuard-GUI
 
-```
+```bash
 #!/bin/bash
 jsf_no_pause="1"
 
@@ -438,7 +448,7 @@ jsf_install_github_appimage \
 
 ### AppImage helper reference
 
-```
+```bash
 jsf_install_github_appimage \
     "AppName" \
     "github-owner/repository" \
@@ -457,17 +467,34 @@ Do not add a separate dependency request for Gear Lever, `curl`, or `jq` to ever
 
 The examples above illustrate helper usage; repository release assets and naming patterns must be checked when maintaining the script. The helper does not guarantee that a particular upstream release still offers a matching AppImage.
 
+### Gear Lever confirmation handling
+
+The shared runtime integration call now passes `--yes` to Gear Lever so its nested
+terminal confirmation does not interrupt or stall the installation workflow.
+This change belongs in `runtime-core.lib`; individual scripts keep using the same
+`jsf_install_github_appimage` interface shown above. It does not change the helper's
+state tracking or optional `--launch` behavior.
+
+The Installed Software Search removal beta separately passes `--yes` to Gear
+Lever only after the user accepts JS-Forge's single-item removal confirmation.
+This is not a global automatic-yes setting for native packages or Flatpak
+uninstall transactions, and it does not request Gear Lever's permanent-delete mode.
+
+When maintaining the runtime, update the source copy used by AppRun and rebuild
+the AppImage as needed. AppRun deploys a runtime copy to the application data
+location; editing only that deployed copy may be overwritten on a later launch.
+
 ### Managed AppImage state
 
 Successfully located AppImages are recorded in:
 
-```
+```text
 ${XDG_STATE_HOME:-$HOME/.local/state}/JS-Forge/appimages/
 ```
 
 Examples:
 
-```
+```text
 ~/.local/state/JS-Forge/appimages/BleachBit.path
 ~/.local/state/JS-Forge/appimages/WireGuard-GUI.path
 ```
@@ -485,7 +512,7 @@ On later runs, the helper uses the saved path and does not download the AppImage
 
 JS-Forge recognizes ordinary `.sh` scripts and package-manager-specific suffixes:
 
-```
+```text
 install-docker.apt
 install-docker.dnf
 install-docker.yum
@@ -497,18 +524,181 @@ A script with one of these suffixes is shown only when the matching package mana
 
 Compatible scripts are executed through Bash without attempting chmod on bundled files. Scripts must be Bash-compatible and must use writable user-data/state/temp locations instead of writing into their read-only bundled directory. The launcher preserves the script path but does not automatically change into the script's directory.
 
+## Recent Linux Control Panel scripts
+
+The current iteration adds or refines the following collection scripts. Keep the
+actual files in the appropriate collection before building; documenting a script
+does not add it to an existing AppImage. These terminal workflows belong in the
+headless collection where appropriate, with desktop-only actions guarded rather
+than forcing a desktop dependency profile onto SSH sessions.
+
+### Installed Software Search and removal beta
+
+Installed Software Search builds a snapshot of:
+
+- Installed native packages, including libraries and dependencies rather than only desktop applications.
+- Installed Flatpak applications in their recorded installation scopes, not Flatpak runtimes.
+- AppImage files found recursively under `~/AppImages`, using case-insensitive filename matching.
+
+Flatpak is queried only when it is already available; inventory collection does
+not install it. AppImage discovery does not imply that every file is integrated
+with Gear Lever.
+
+| Control | Action |
+| --- | --- |
+| Type | Live fuzzy filtering; an empty query shows the full inventory |
+| Arrows / Page Up / Page Down | Navigate results |
+| Ctrl+U | Clear the query |
+| Ctrl+E | Export the entire snapshot, regardless of the current filter |
+| Ctrl+D or double-click | Request removal of one highlighted item |
+| Ctrl+R | Refresh the inventory |
+| Enter | No action |
+| Esc | Close the browser |
+
+Exports are unique timestamped text reports under `~/JS-Forge-Exports/`, including
+collection/export timestamps and the inventory count. Export is explicit; opening
+or filtering the inventory does not automatically create a report.
+
+Removal remains a beta workflow:
+
+- The confirmation identifies the selected item and its source and defaults to Cancel.
+- Hidden snapshot-specific identifiers map to structured metadata; formatted display rows are not parsed into uninstall arguments. Stale selections are rejected.
+- Native removal uses the detected package manager and retains its transaction prompt. No automatic yes, purge, or explicit autoremove is requested; DNF/YUM orphan cleanup is disabled for the removal command.
+- A single selected native package can still cause the manager to propose removing other dependent packages. Review that transaction and decline if unsure.
+- Flatpak removal uses the exact application ref and installation scope, without `--delete-data`.
+- AppImage removal requires an exact reported path match in Gear Lever and delegates to Gear Lever without sudo. No manual file-deletion fallback or `--remove-all` is used.
+- Gear Lever removal is unavailable in SSH/headless sessions and does not install desktop tools merely to enable it.
+- The currently running JS-Forge AppImage is protected using its `APPIMAGE` path, including resolved-path comparison.
+- Immediate inventory/runtime dependencies and apt essential/protected packages receive additional guards. These are not a complete operating-system safety policy.
+- After a removal command returns, the inventory is refreshed. Canceling the confirmation leaves the inventory unchanged.
+
+Start removal testing with disposable applications or a VM snapshot. Package-manager
+support and mocked tests do not guarantee that every proposed removal is safe.
+
+### LF file manager
+
+The LF launcher offers user or root mode, with user mode selected by default.
+User mode opens the user's home directory; root mode uses `sudo -H` and opens `/`.
+Cancel exits without launching LF.
+
+The entire root-mode file manager session, including shell actions, runs with
+administrative privileges. Use user mode for ordinary file management. LF's delete
+action is not a substitute for the inventory tool's package-aware removal flow.
+
+### lnav log viewer
+
+The log-viewer workflow uses an explicit `/var/log` target instead of relying on
+lnav to discover default log files. Administrative access is used when needed to
+read protected logs. Recursive viewing and mouse support depend on the installed
+lnav version and the launcher options; older distribution packages may differ.
+
+### OpenSSH server installer
+
+The OpenSSH installer requests the appropriate native package through the shared
+runtime. It is an installation-only wrapper: it adds no explicit service-management
+commands and does not edit SSH configuration or firewall rules. Distribution
+package scripts may start or enable the service during installation; review the
+host's resulting service and access settings.
+
+### Lynis security audit
+
+The Lynis script requests the native `lynis` package, runs `lynis audit system`
+with administrative access, and displays the audit on screen. It uses quick mode
+to avoid normal section-by-section pauses and captures plain-text output.
+
+After the audit:
+
+| Control | Action |
+| --- | --- |
+| V | View the findings summary |
+| C | Review the captured screen output |
+| E | Export the current audit |
+| R | Run a fresh audit |
+| Q | Quit |
+
+Each requested export creates a unique timestamped `Lynis-...` folder under
+`~/JS-Forge-Exports/` containing:
+
+| File | Contents |
+| --- | --- |
+| `summary.txt` | Audit/capture status, warning and suggestion counts, and findings |
+| `console.txt` | Captured terminal output |
+| `lynis.log` | Detailed Lynis log, when produced and copied successfully |
+| `lynis-report.dat` | Native Lynis report data, when produced and copied successfully |
+
+The script does not apply hardening fixes, configure a firewall, add scheduled
+jobs, or request report upload. Findings require review in the context of the
+host; a hardening index is not proof of security. Errors or missing reports are
+identified rather than treated as a clean audit result.
+
+Root-generated logs are collected in a private workspace and copied into the
+script's user-side temporary workspace before optional export. Export before
+quitting or rerunning if you want to retain the current audit; normal exit removes
+the temporary copies. A report-copy failure can retain the private workspace and
+print its location for recovery rather than deleting the remaining source files.
+Reports may contain sensitive account, host, and network information. Export
+folders and files use restrictive permissions; review and redact them before
+sharing.
+
+## Exports and saved reports
+
+The current inventory and Lynis scripts use:
+
+```text
+~/JS-Forge-Exports/
+```
+
+This is a user-facing export directory, separate from the runtime library,
+GitEngine repositories, temporary workspaces, and managed-AppImage state. It is
+created when an export is requested, not merely because JS-Forge starts. These
+scripts do not require the application bundle to be writable.
+
+Examples of the resulting layout:
+
+```text
+~/JS-Forge-Exports/
+├── JS-Forge-Installed-Software-<timestamp>.<unique>.txt
+└── Lynis-<timestamp>.<unique>/
+    ├── summary.txt
+    ├── console.txt
+    ├── lynis.log
+    └── lynis-report.dat
+```
+
+Unique names avoid overwriting previous exports. Inventory export always uses the
+full collected snapshot, not only visible search matches. Lynis exports preserve
+the latest completed or partial audit available in that script session; files
+that were not produced cannot be included.
+
+The location is currently set by the individual scripts; it is not a new global
+runtime setting or an XDG data/state directory. `~` refers to the home directory
+used by the script. Running the entire script as root can therefore use root's
+home, whereas elevating only the audit/package commands keeps the normal user's
+export location.
+
+Existing xProbe reports, AppImage path records, and downloaded applications are
+not automatically relocated into this directory. Export files are saved reports,
+not disposable runtime cache, and should not be removed as part of routine
+application reset without user approval.
+
 ## Pause and no-pause modes
 
 Installer and repair scripts use the default paused launch behavior so users can read their output.
 
 Launcher-style scripts can return immediately by placing this near the top:
 
-```
+```bash
 #!/bin/bash
 jsf_no_pause="1"
 ```
 
-Use no-pause for quick app launchers, Flatpak handoffs, AppImage launchers, and short background actions. Leave it out for installers, repair tools, and workflows that need visible output.
+Use no-pause for quick app launchers, Flatpak handoffs, AppImage launchers, and short background actions. Leave it out for installers, repair tools, and workflows that rely on the launcher's final pause.
+
+An interactive script may also use `jsf_no_pause="1"` when it manages its own menu,
+viewer, or closing prompt. Installed Software Search, the OpenSSH installer, and
+the Lynis workflow handle their own interaction rather than needing a duplicate
+launcher pause. This setting does not require a script to run in the background
+or hide its terminal output.
 
 ## Extension system
 
@@ -560,7 +750,7 @@ The emoji extension can detect missing fontconfig support or missing `Noto Color
 
 ## Workflow automation
 
-JS-Forge can wrap desktop actions, package installs, Flatpak onboarding, AppImage installation, repository sync jobs, repair flows, bootstrap routines, maintenance tasks, and curated multi-step utilities in one consistent menu-driven environment.
+JS-Forge can wrap desktop actions, package installs, Flatpak onboarding, AppImage installation, repository sync jobs, repair flows, bootstrap routines, maintenance tasks, security audits, inventory exports, and curated multi-step utilities in one consistent menu-driven environment.
 
 ## Forking and customizing
 
@@ -573,6 +763,7 @@ JS-Forge can wrap desktop actions, package installs, Flatpak onboarding, AppImag
 - Use package-manager-specific script suffixes for distro-targeted actions.
 - Choose paused or no-pause behavior per script.
 - Use `jsf_install_github_appimage` instead of duplicating GitHub release, download, Gear Lever, and state-tracking code.
+- Keep user-facing report exports separate from caches and application state; use the current `~/JS-Forge-Exports/` convention where appropriate.
 
 ## Building new scripts
 
@@ -582,8 +773,10 @@ JS-Forge can wrap desktop actions, package installs, Flatpak onboarding, AppImag
 4. Use runtime UI helpers such as `center`, `divider`, `print_red`, `text_delay`, and terminal-launch helpers for a consistent experience.
 5. Put bundled scripts under `Linux-Control-Panel/headless/` or `gui/` according to their requirements; GitEngine scripts and extensions use their separate discovered locations.
 6. Use package-manager suffixes for distro-specific scripts.
-7. Use `jsf_no_pause="1"` for quick launchers when appropriate.
+7. Use `jsf_no_pause="1"` for quick launchers or scripts that handle their own interaction when appropriate.
 8. Use `jsf_install_github_appimage` for GitHub-hosted AppImages.
+9. Offer explicit export for reports that users may want to retain, using unique names under `~/JS-Forge-Exports/` and appropriate permissions for sensitive content.
+10. Preserve exact targets and scope for destructive actions, default confirmations to Cancel, and retain native transaction review where applicable.
 
 ## Current Linux assumptions
 
@@ -600,6 +793,12 @@ Local testing of the current build has been reported successful. Additional
 SSH/headless validation is planned; this is not a claim of completed testing on
 Proxmox, DietPi, or every distribution. Probe/network/package work still depends on
 the host environment.
+
+Recent collection scripts have a mixture of reported live use and syntax/mocked
+checks. Those checks do not establish successful real package installation,
+removal, or complete audit coverage on every supported distribution. The software
+removal workflow remains beta, and the new Lynis script still needs host-level
+validation. Preserve these distinctions when updating this living document.
 
 ## Startup timing and AppImage behavior
 
@@ -659,13 +858,21 @@ bundled script folders. Do not treat a source-update overlay as a complete AppDi
 | `~/.JS-Forge` | Additional GitEngine repositories/scripts |
 | `/tmp/JS-Forge` | Application temporary workspace |
 | `${XDG_STATE_HOME:-$HOME/.local/state}/JS-Forge/appimages` | Managed-AppImage path records |
+| `~/JS-Forge-Exports` | Explicitly saved inventory reports and exported Lynis audit folders; not runtime cache |
+
+Individual collection scripts may also create private, uniquely named temporary
+workspaces. The inventory and Lynis wrappers clean their own temporary files on
+normal exit; this is separate from deleting saved exports or resetting JS-Forge.
+See the Lynis section for its report-copy failure recovery behavior.
 
 Not all of these files are disposable cache: repository-list edits, user extensions,
-and cloned repositories may contain user-authored data. Removing AppImage path
-records is not the same as uninstalling the applications they reference.
+cloned repositories, and exported reports may contain user-authored or sensitive
+data. Removing AppImage path records is not the same as uninstalling the
+applications they reference.
 
-Cleanup & Reset is deferred. No cleanup tool or automatic removal of application
-or system data is introduced by this update.
+Cleanup & Reset is deferred. The inventory script's explicit single-item removal
+beta is not a general cleanup/reset tool; no broad automatic removal of saved
+reports, application data, or system data is introduced by this update.
 
 ## Philosophy
 
