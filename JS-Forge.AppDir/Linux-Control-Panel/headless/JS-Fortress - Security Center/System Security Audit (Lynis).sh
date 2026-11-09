@@ -8,6 +8,9 @@ source "$runtime_core_path" || {
     exit 1
 }
 jsf_init_runtime_core
+
+export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
+
 jsf_require_all --native lynis || exit 1
 
 export_root="$HOME/JS-Forge-Exports"
