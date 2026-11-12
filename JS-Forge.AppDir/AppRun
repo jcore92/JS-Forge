@@ -250,15 +250,15 @@ variables() {
 	# DEFAULT GUI WINDOW SIZES & OVERRIDES BASED ON DE:
 	# =============================================================================
 
-	default_eula_gui_dimensions="--width=550 --height=600"
-	default_mainmenu_gui_dimensions="--width=475 --height=600"
+	default_eula_gui_dimensions="--width=500 --height=550"
+	default_mainmenu_gui_dimensions="--width=425 --height=575"
 	default_loading_gui_dimensions="--width=300 --height=200"
 	default_messagebox_gui_dimensions="--width=350"
 
 	if [ "$XDG_CURRENT_DESKTOP" == "XFCE" ]; then
 
-		default_eula_gui_dimensions="--width=550 --height=600"
-		default_mainmenu_gui_dimensions="--width=475 --height=600"
+		default_eula_gui_dimensions="--width=500 --height=550"
+		default_mainmenu_gui_dimensions="--width=425 --height=575"
 		default_loading_gui_dimensions="--width=300 --height=200"
 		default_messagebox_gui_dimensions="--width=350"
 
@@ -266,8 +266,8 @@ variables() {
 
 	if [ "$XDG_CURRENT_DESKTOP" == "COSMIC" ]; then
 
-		default_eula_gui_dimensions="--width=550 --height=600"
-		default_mainmenu_gui_dimensions="--width=475 --height=600"
+		default_eula_gui_dimensions="--width=500 --height=550"
+		default_mainmenu_gui_dimensions="--width=425 --height=575"
 		default_loading_gui_dimensions="--width=300 --height=200"
 		default_messagebox_gui_dimensions="--width=350"
 
@@ -275,8 +275,8 @@ variables() {
 
 	if [ "$XDG_CURRENT_DESKTOP" == "KDE" ]; then
 
-		default_eula_gui_dimensions="--width=550 --height=600"
-		default_mainmenu_gui_dimensions="--width=475 --height=600"
+		default_eula_gui_dimensions="--width=500 --height=550"
+		default_mainmenu_gui_dimensions="--width=425 --height=575"
 		default_loading_gui_dimensions="--width=300 --height=200"
 		default_messagebox_gui_dimensions="--width=350"
 
@@ -284,8 +284,8 @@ variables() {
 
 	if [[ "$XDG_CURRENT_DESKTOP" == *GNOME* ]]; then
 
-		default_eula_gui_dimensions="--width=550 --height=600"
-		default_mainmenu_gui_dimensions="--width=475 --height=600"
+		default_eula_gui_dimensions="--width=500 --height=550"
+		default_mainmenu_gui_dimensions="--width=425 --height=575"
 		default_loading_gui_dimensions="--width=300 --height=200"
 		default_messagebox_gui_dimensions="--width=350"
 
