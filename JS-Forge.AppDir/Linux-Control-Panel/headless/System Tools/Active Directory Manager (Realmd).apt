@@ -1,0 +1,2264 @@
+#!/bin/bash
+jsf_no_pause="1"
+umask 077
+app_name="JS-Forge"
+runtime_core_path="${JSF_RUNTIME_CORE_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/$app_name/runtime-core.lib}"
+source "$runtime_core_path" || { echo "Fatal: failed to source JS-Forge runtime: $runtime_core_path" >&2; exit 1; }
+jsf_init_runtime_core
+export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
+for tool in apt-get dpkg-query; do
+    command -v "$tool" >/dev/null 2>&1 || { echo 'This wrapper requires an APT/dpkg-based system.' >&2; exit 1; }
+done
+declare -F cursor_menu >/dev/null || { echo 'Runtime cursor_menu function not found.' >&2; exit 1; }
+# Explicit APT names: realm is provided by realmd, dig by bind9-dnsutils.
+packages=(realmd sssd sssd-ad sssd-tools sssd-dbus adcli libnss-sss libpam-sss samba-common-bin packagekit bind9-dnsutils krb5-user python3)
+export_root="$HOME/JS-Forge-Exports"
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/jsforge-realmd.XXXXXX")" || exit 1
+trap 'rm -f -- "$work_dir"/*; rmdir -- "$work_dir" 2>/dev/null || :' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+pause_screen() { printf '\n'; read -r -p 'Press Enter to continue...' _reply; }
+as_root() { if (( EUID == 0 )); then "$@"; else sudo -- "$@"; fi; }
+authorize_root() {
+    if (( EUID != 0 )); then
+        command -v sudo >/dev/null 2>&1 || { echo 'sudo is required.' >&2; return 1; }
+        sudo -v || return 1
+    fi
+}
+confirm_local() {
+    local answer
+    cursor_menu "$1" answer 'Cancel' 'Proceed' || return 1
+    [ "$answer" = Proceed ]
+}
+view_file() {
+    if [ ! -f "$1" ]; then echo 'No saved output yet.'; pause_screen; return; fi
+    if command -v less >/dev/null 2>&1 && [ -t 0 ] && [ -t 1 ]; then
+        LESSSECURE=1 LESSHISTFILE=- less -- "$1"
+    else cat -- "$1"; pause_screen; fi
+}
+print_command() { printf '  '; printf '%q ' "$@"; printf '\n'; }
+run_interactive() {
+    local rc
+    authorize_root || return 1
+    {
+        printf '\n[%s] Requested interactive action:\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        print_command "$@"
+        echo 'Interactive output/password prompts are not captured by this wrapper.'
+    } >> "$work_dir/actions.txt"
+    as_root "$@"
+    rc=$?
+    printf 'Command exit status: %s\n' "$rc" | tee -a "$work_dir/actions.txt"
+    if [ "$rc" -ne 0 ]; then echo 'Action failed or did not finish normally. Review terminal output and membership/status.'; fi
+    return "$rc"
+}
+run_read() {
+    local destination="$1"; shift
+    local -a status
+    authorize_root || return 1
+    as_root env LC_ALL=C "$@" 2>&1 | tee "$destination"
+    status=("${PIPESTATUS[@]}")
+    printf '\nCommand exit status: %s | Capture status: %s\n' "${status[0]}" "${status[1]}" | tee -a "$destination"
+    [ "${status[0]}" = 0 ] && [ "${status[1]}" = 0 ]
+}
+package_installed() {
+    [ "$(LC_ALL=C dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" = 'install ok installed' ]
+}
+ensure_packages() {
+    local package
+    local -a missing=()
+    for package in "${packages[@]}"; do package_installed "$package" || missing+=("$package"); done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        printf '\nMissing native packages:\n'; printf '  %s\n' "${missing[@]}"
+        echo 'APT may install dependencies and start/configure packaged services.'
+        echo 'No automatic apt update or auto-yes is used. Review APT changes before accepting.'
+        confirm_local 'Install these domain integration packages?' || return 1
+        run_interactive apt-get install "${missing[@]}" || return 1
+        for package in "${packages[@]}"; do package_installed "$package" || { echo "Package still unavailable: $package"; return 1; }; done
+    fi
+    command -v realm >/dev/null 2>&1 || { echo 'realmd is installed but realm is unavailable.'; return 1; }
+}
+valid_domain() {
+    local value="$1" label
+    local -a labels=()
+    [ "${#value}" -le 253 ] && [[ "$value" = *.* ]] || return 1
+    [[ "$value" =~ ^[A-Za-z0-9.-]+$ ]] && [[ ! "$value" =~ ^[0-9.]+$ ]] || return 1
+    [[ "$value" != .* && "$value" != *. && "$value" != *..* ]] || return 1
+    IFS=. read -r -a labels <<< "$value"
+    for label in "${labels[@]}"; do
+        [ "${#label}" -le 63 ] && [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+    done
+}
+read_domain() {
+    local input
+    read -r -p 'AD DNS domain, e.g. ad.example.com (empty cancels): ' input || return 1
+    [ -n "$input" ] || return 1
+    domain="${input,,}"
+    valid_domain "$domain" || { echo 'Enter a DNS domain, not an IP, URL, NetBIOS name, or shell command.'; pause_screen; return 1; }
+}
+valid_text() { [ -n "$1" ] && [ "${#1}" -le 1024 ] && [[ ! "$1" =~ [[:cntrl:]] ]]; }
+current_memberships() {
+    local output rc member
+    output="$(as_root env LC_ALL=C realm list --name-only 2>&1)"; rc=$?
+    if [ "$rc" -ne 0 ]; then printf '%s\n' "$output" >&2; return 1; fi
+    memberships=()
+    while IFS= read -r member; do [ -z "$member" ] || memberships+=("$member"); done <<< "$output"
+}
+discover_domain() {
+    ensure_packages || { pause_screen; return; }
+    read_domain || return
+    run_read "$work_dir/discovery.txt" realm discover --server-software=active-directory --client-software=sssd --membership-software=adcli "$domain"
+    pause_screen
+}
+show_membership() {
+    ensure_packages || { pause_screen; return; }
+    run_read "$work_dir/membership.txt" realm list
+    pause_screen
+}
+join_domain() {
+    local domain join_user ou choice
+    local -a memberships=() args
+    ensure_packages && authorize_root || { pause_screen; return; }
+    current_memberships || { echo 'Cannot safely inspect membership; joining cancelled.'; pause_screen; return; }
+    if [ "${#memberships[@]}" -gt 0 ]; then
+        printf 'Already configured realm(s):\n'; printf '  %s\n' "${memberships[@]}"
+        echo 'Use the SSSD repair/diagnostic actions for an existing join; do not leave/rejoin to repair login.'
+        pause_screen; return
+    fi
+    read_domain || return
+    echo 'Checking Active Directory discovery before asking for join credentials...'
+    if ! run_read "$work_dir/discovery.txt" realm discover --server-software=active-directory --client-software=sssd --membership-software=adcli "$domain"; then
+        echo 'Discovery failed. Check AD DNS, connectivity, clock synchronization, and D-Bus/services.'; pause_screen; return
+    fi
+    if ! grep -Eq '^[[:space:]]*server-software:[[:space:]]*active-directory[[:space:]]*$' "$work_dir/discovery.txt"; then
+        echo 'Discovery did not confirm Active Directory; joining cancelled.'; pause_screen; return
+    fi
+    prepare_auth_for_domain "$domain" || { echo 'Preparation not completed; joining cancelled.'; pause_screen; return; }
+    read -r -p 'Account authorized to join computers (username or UPN; empty cancels): ' join_user || return
+    valid_text "$join_user" || return
+    cursor_menu 'Computer account location:' choice 'Default domain location' 'Specify an OU distinguished name' 'Cancel' || return
+    args=(realm join --verbose --client-software=sssd --membership-software=adcli "--user=$join_user")
+    case "$choice" in
+        'Default domain location') ;;
+        'Specify an OU distinguished name')
+            read -r -p 'Full OU DN, without surrounding quotes (empty cancels): ' ou || return
+            valid_text "$ou" || return; args+=("--computer-ou=$ou") ;;
+        *) return ;;
+    esac
+    args+=("$domain")
+    printf '\nProposed join:\n'; print_command "${args[@]}"
+    echo 'Joining creates/uses an AD computer account and configures Kerberos/keytab, SSSD, PAM/NSS and services.'
+    echo 'Keep a working LOCAL admin login and console access. There is no automatic enrollment rollback.'
+    echo 'realmd requests the password directly; do not put passwords in account/OU fields.'
+    confirm_local 'Join this computer to the displayed domain?' || return
+    current_memberships || { echo 'Membership refresh failed; joining cancelled.'; pause_screen; return; }
+    if [ "${#memberships[@]}" -gt 0 ]; then echo 'Membership changed; joining cancelled.'; pause_screen; return; fi
+    if run_interactive "${args[@]}"; then
+        local member found=0
+        if current_memberships; then
+            for member in "${memberships[@]}"; do [ "${member,,}" != "$domain" ] || found=1; done
+        fi
+        run_read "$work_dir/membership.txt" realm list
+        if [ "$found" = 1 ]; then
+            echo 'Enrollment is reported. Checking optional local SSSD compatibility fixes next...'
+            sssd_compat_for_domain "$domain"
+        else echo 'WARNING: join command succeeded but requested membership was not verified.'; fi
+        echo 'Enrollment is not a full login test. Use identity/login checks and home-creation action as needed.'
+        echo 'Unreadable GPO handling is a SEPARATE optional exception; never automatically enabled.'
+    fi
+    pause_screen
+}
+choose_joined_domain() {
+    local selected member
+    current_memberships || return 1
+    [ "${#memberships[@]}" -gt 0 ] || { echo 'No configured realms reported.'; return 1; }
+    cursor_menu 'Choose a configured realm:' selected 'Cancel' "${memberships[@]}" || return 1
+    for member in "${memberships[@]}"; do
+        if [ "$selected" = "$member" ] && valid_domain "$member"; then selected_domain="$member"; return 0; fi
+    done
+    return 1
+}
+leave_domain() {
+    local selected_domain member present=0
+    local -a memberships=()
+    ensure_packages && authorize_root || { pause_screen; return; }
+    choose_joined_domain || { pause_screen; return; }
+    printf '\nLeave/deconfigure: %s\n' "$selected_domain"
+    echo 'Local realm integration is removed; domain logins may stop. Keep a working local admin login.'
+    echo 'No --remove: the AD computer account is not explicitly deleted. Home directories are not deleted.'
+    echo 'No automatic rollback or secure erasure of all credentials/caches is provided.'
+    confirm_local 'Deconfigure this computer from the displayed realm?' || return
+    current_memberships || { pause_screen; return; }
+    for member in "${memberships[@]}"; do [ "$member" != "$selected_domain" ] || present=1; done
+    [ "$present" = 1 ] || { echo 'Membership changed; nothing deconfigured.'; pause_screen; return; }
+    print_command realm leave --client-software=sssd --server-software=active-directory "$selected_domain"
+    if run_interactive realm leave --client-software=sssd --server-software=active-directory "$selected_domain"; then
+        run_read "$work_dir/membership.txt" realm list
+    fi
+    pause_screen
+}
+enable_homes() {
+    ensure_packages || { pause_screen; return; }
+    if ! command -v pam-auth-update >/dev/null 2>&1 || [ ! -f /usr/share/pam-configs/mkhomedir ]; then
+        echo 'Packaged pam-auth-update/mkhomedir profile unavailable; no PAM file edits attempted.'; pause_screen; return
+    fi
+    echo 'Enable the system-wide packaged PAM mkhomedir profile; home folders are created at login, not now.'
+    echo 'Keep a working local administrator login.'
+    confirm_local 'Enable the packaged home-directory creation profile?' || return
+    run_interactive pam-auth-update --enable mkhomedir
+    pause_screen
+}
+test_identity() {
+    local account
+    ensure_packages || { pause_screen; return; }
+    read -r -p 'Domain account, e.g. user@ad.example.com (empty cancels): ' account || return
+    valid_text "$account" && [[ "$account" != -* ]] || return
+    {
+        printf 'JS-Forge: Domain Identity Lookup\nAccount: %s\n\n' "$account"
+        getent passwd "$account"; printf 'getent exit status: %s\n\n' "$?"
+        id -- "$account"; printf 'id exit status: %s\n' "$?"
+        echo 'Identity resolution is not proof of password authentication or permission to log in.'
+    } 2>&1 | tee "$work_dir/identity.txt"
+    pause_screen
+}
+diagnostics() {
+    local domain
+    read_domain || return
+    {
+        printf 'JS-Forge: Domain Prerequisites\nDomain: %s\n\n' "$domain"
+        printf 'Local time (not verified against DC):\n'; date '+%Y-%m-%d %H:%M:%S %Z'
+        printf '\nHostname:\n'; hostname; hostname -f 2>&1
+        printf '\nPID 1:\n'; ps -p 1 -o comm= 2>&1
+        printf '\nResolver configuration:\n'; cat /etc/resolv.conf
+        printf '\nDomain host lookup (missing base-domain A/AAAA alone is not definitive):\n'; getent ahosts "$domain"
+        if command -v dig >/dev/null 2>&1; then
+            printf '\nAD LDAP SRV:\n'; dig +time=3 +tries=1 +noall +answer SRV "_ldap._tcp.dc._msdcs.$domain"
+            printf '\nKerberos SRV:\n'; dig +time=3 +tries=1 +noall +answer SRV "_kerberos._tcp.$domain"
+        else echo 'Install dependencies for dig/SRV diagnostics.'; fi
+        echo 'No DNS, hostname, firewall, or time changes were made.'
+    } > "$work_dir/diagnostics.txt" 2>&1
+    view_file "$work_dir/diagnostics.txt"
+}
+export_reports() {
+    local destination file failed=0
+    mkdir -p -- "$export_root" || { pause_screen; return; }
+    destination="$(mktemp -d "$export_root/Realmd-$(date +%Y-%m-%d_%H-%M-%S).XXXXXX")" || { pause_screen; return; }
+    for file in "$work_dir"/*.txt; do [ ! -f "$file" ] || cp -- "$file" "$destination/" || failed=1; done
+    {
+        printf 'JS-Forge: realmd Report\nExported: %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        echo 'No keytab, SSSD configuration, password, credential cache, or raw SSSD logs are copied.'
+        echo 'Reports may identify domains/accounts, access policy, DNS and backup paths; review before sharing.'
+        for file in "${packages[@]}"; do dpkg-query -W -f='${Package}\t${Version}\t${Status}\n' "$file" 2>/dev/null || :; done
+    } > "$destination/summary.txt" || failed=1
+    chmod 600 -- "$destination"/* || failed=1
+    printf '\nReport folder:\n%s\n' "$destination"
+    [ "$failed" = 0 ] || echo 'Export may be incomplete.'
+    pause_screen
+}
+
+# Fixed native paths; only Python's standard library is used for structured edits.
+config_helper() {
+    as_root env PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C python3 - "$@" <<'JSF_CONFIG_PY'
+import os,sys,re,stat,hashlib,tempfile,datetime,uuid,fcntl,subprocess,shlex
+from pathlib import Path
+os.umask(0o077)
+KRB=Path('/etc/krb5.conf')
+LDAP=Path('/etc/ldap/ldap.conf')
+SSSD=Path('/etc/sssd/sssd.conf')
+DEFAULT=Path('/etc/default/sssd')
+INIT=Path('/etc/init.d/sssd')
+PID1=Path('/proc/1/comm')
+LOCK=Path('/etc/.jsforge-realmd-preparation.lock')
+operation,phase,domain,realm=sys.argv[1:5]
+expected=sys.argv[5] if len(sys.argv)>5 else ''
+if operation not in ('plan','apply') or phase not in ('auth','sssd','gpo-on','gpo-off') or not re.fullmatch(r'[A-Za-z0-9.-]+',domain) or not re.fullmatch(r'[A-Za-z0-9.-]+',realm):
+    sys.exit('Invalid configuration-helper arguments.')
+if os.geteuid()!=0:sys.exit('Configuration preparation requires root.')
+
+def read_file(p,required=False):
+    if p.is_symlink() or p.parent.is_symlink():raise ValueError(f'Symlinked configuration requires manual review: {p}')
+    if p.parent.exists() and not p.parent.is_dir():raise ValueError(f'Not a directory: {p.parent}')
+    try:s=p.lstat()
+    except FileNotFoundError:
+        if required:raise ValueError(f'Missing {p}. Repair requires a configured join; no replacement SSSD domain is fabricated.')
+        return dict(raw=b'',s=None)
+    if not stat.S_ISREG(s.st_mode) or s.st_nlink!=1 or s.st_size>1048576:raise ValueError(f'Non-regular, hard-linked or oversized configuration: {p}')
+    data=p.read_bytes()
+    if b'\0' in data:raise ValueError(f'NUL in {p}')
+    return dict(raw=data,s=s)
+
+def update_ini(raw,section,wanted,remove=(),must_exist=False):
+    text=raw.decode('utf-8','surrogateescape');nl='\r\n' if '\r\n' in text else '\n'
+    out=[];current='';seen=set();found=False;finalized=False
+    def finish():
+        nonlocal finalized
+        if finalized:return
+        missing=[(k,v) for k,v in wanted.items() if k not in seen]
+        if missing and out and not out[-1].endswith(('\n','\r')):out[-1]+=nl
+        for k,v in missing:out.append(f'    {k} = {v}{nl}');seen.add(k)
+        finalized=True
+    for line in text.splitlines(keepends=True):
+        body=line.rstrip('\r\n');end=line[len(body):]
+        header=re.match(r'^\s*\[([^\]]+)\]\*?\s*(?:[#;].*)?$',body)
+        if header:
+            if current.casefold()==section.casefold():finish()
+            current=header.group(1).strip()
+            if current.casefold()==section.casefold():found=True
+            out.append(line);continue
+        if current.casefold()==section.casefold():
+            if body.strip() and not body.lstrip().startswith(('#',';')) and ('{' in body or '}' in body):raise ValueError(f'Nested [{section}] requires manual review.')
+            m=re.match(r'^(\s*)([A-Za-z0-9_]+)(\*?)(\s*=\s*)(.*)$',body)
+            if m:
+                indent,key,final,sep,rhs=m.groups()
+                if key in remove:
+                    out.append(indent+'# JS-Forge obsolete option: '+body.lstrip()+end);continue
+                if key in wanted:
+                    if key in seen:out.append(indent+'# JS-Forge superseded duplicate: '+body.lstrip()+end);continue
+                    seen.add(key);value=re.split('[;#]',rhs,1)[0].strip();desired=wanted[key]
+                    correct=value==desired if key=='default_realm' else value.lower()==desired.lower()
+                    if correct:out.append(line)
+                    else:
+                        comment=re.search(r'\s+[;#].*$',rhs)
+                        out.append(indent+key+final+sep+desired+(comment.group(0) if comment else '')+end)
+                    continue
+        out.append(line)
+    if not found:
+        if must_exist:raise ValueError(f'Missing [{section}]; refusing to invent a domain section.')
+        if out and not out[-1].endswith(('\n','\r')):out[-1]+=nl
+        out.append(nl+f'[{section}]'+nl)
+    finish()
+    result=''.join(out).encode('utf-8','surrogateescape')
+    if result!=raw and re.search(r'^\s*include(?:dir)?\s',text,re.M):raise ValueError('Conflicting include-based configuration needs manual review; no files changed.')
+    return result
+
+def update_ldap(raw):
+    text=raw.decode('utf-8','surrogateescape');nl='\r\n' if '\r\n' in text else '\n';out=[];seen=False
+    for line in text.splitlines(keepends=True):
+        body=line.rstrip('\r\n');end=line[len(body):];m=re.match(r'^(\s*)SASL_NOCANON\s+(\S+)(.*)$',body,re.I)
+        if m:
+            if seen:out.append(m.group(1)+'# JS-Forge superseded duplicate: '+body.lstrip()+end)
+            elif m.group(2).lower()=='on':out.append(line)
+            else:out.append(m.group(1)+'SASL_NOCANON on'+m.group(3)+end)
+            seen=True
+        else:out.append(line)
+    if not seen:
+        if out and not out[-1].endswith(('\n','\r')):out[-1]+=(nl)
+        out.append('SASL_NOCANON on'+nl)
+    return ''.join(out).encode('utf-8','surrogateescape')
+
+def command(args):
+    try:
+        result=subprocess.run(args,text=True,capture_output=True,timeout=20,env=dict(os.environ,LC_ALL='C'))
+        return result.returncode,result.stdout+result.stderr
+    except (OSError,subprocess.TimeoutExpired) as e:return 127,str(e)
+
+def sysv_options(raw,helptext):
+    text=raw.decode('utf-8','surrogateescape');lines=text.splitlines(keepends=True)
+    entries=[i for i,line in enumerate(lines) if re.match(r'^\s*(?:export\s+)?DAEMON_OPTS\s*=',line)]
+    if len(entries)>1:raise ValueError('Multiple DAEMON_OPTS assignments require manual review.')
+    options=[];index=entries[0] if entries else None;comment=''
+    if index is not None:
+        rhs=lines[index].split('=',1)[1].rstrip('\r\n')
+        if '$' in rhs or '`' in rhs or '\\' in rhs:raise ValueError('Dynamic DAEMON_OPTS requires manual review; not evaluated.')
+        parsed=shlex.split(rhs,comments=True)
+        if len(parsed)>1:raise ValueError('Unexpected DAEMON_OPTS syntax; refusing to guess.')
+        options=shlex.split(parsed[0]) if parsed else []
+        if any(not re.fullmatch(r'[A-Za-z0-9_./=,:+\-]+',o) for o in options):raise ValueError('Complex DAEMON_OPTS requires manual review.')
+        tail=re.search(r'\s+(#.*)$',rhs)
+        if tail:comment=' '+tail.group(1)
+    original=options[:]
+    if not re.search(r'(^|[\s,])-f([\s,=]|$)',helptext):options=[o for o in options if o!='-f']
+    if '--logger' in helptext:
+        cleaned=[];skip=False
+        for o in options:
+            if skip:skip=False;continue
+            if o=='--logger':skip=True;continue
+            if o.startswith('--logger='):continue
+            cleaned.append(o)
+        options=cleaned+['--logger=files']
+    if index is not None and options==original:return raw
+    nl='\r\n' if '\r\n' in text else '\n'
+    replacement='DAEMON_OPTS="'+' '.join(options)+'"'+comment+nl
+    if index is None:
+        if lines and not lines[-1].endswith(('\n','\r')):lines[-1]+=nl
+        lines.append(replacement)
+    else:lines[index]=replacement
+    return ''.join(lines).encode('utf-8','surrogateescape')
+
+def make_plan():
+    details=[];evidence=''
+    if phase=='auth':
+        paths=[KRB,LDAP];old={p:read_file(p) for p in paths}
+        if old[KRB]['raw'].strip():newkrb=update_ini(old[KRB]['raw'],'libdefaults',dict(default_realm=realm,rdns='false'))
+        else:newkrb=(f'[libdefaults]\n    default_realm = {realm}\n    rdns = false\n    dns_lookup_kdc = true\n    dns_lookup_realm = false\n\n[domain_realm]\n    {domain} = {realm}\n    .{domain} = {realm}\n').encode()
+        new={KRB:newkrb,LDAP:update_ldap(old[LDAP]['raw'])}
+        previous=re.findall(r'^\s*default_realm\s*=\s*([^#;\r\n]+)',old[KRB]['raw'].decode('utf-8','surrogateescape'),re.M)
+        details=[f'Proposed Kerberos realm: {realm}',f'Existing main-file default_realm entries: {", ".join(v.strip() for v in previous) or "(unset)"}',
+                 'Managed auth settings: default_realm, rdns=false, LDAP SASL_NOCANON on.']
+    elif phase=='sssd':
+        paths=[SSSD];old={SSSD:read_file(SSSD,True)};new={SSSD:old[SSSD]['raw']}
+        rc,validation=command(['sssctl','config-check']);evidence+=validation
+        if re.search(r"[\"']config_file_version[\"']\s+is not allowed",validation):
+            new[SSSD]=update_ini(old[SSSD]['raw'],'sssd',{},remove=('config_file_version',),must_exist=True)
+            details.append('Comment obsolete config_file_version ONLY because installed validator rejects it.')
+        else:details.append('No validator-confirmed config_file_version rejection; that option is left unchanged.')
+        pid1=PID1.read_text().strip() if PID1.exists() else 'unknown'
+        init=INIT.read_text(errors='replace') if INIT.is_file() else ''
+        evidence+=pid1+init
+        if pid1!='unknown' and pid1!='systemd' and '/etc/default/sssd' in init and 'DAEMON_OPTS' in init:
+            rc,helptext=command(['sssd','--help']);evidence+=helptext
+            if rc!=0:raise ValueError('Cannot inspect installed SSSD options; no startup edits attempted.')
+            old[DEFAULT]=read_file(DEFAULT);paths.append(DEFAULT)
+            new[DEFAULT]=sysv_options(old[DEFAULT]['raw'],helptext)
+            details.append('SysV defaults: remove standalone -f only if unsupported; use --logger=files when supported. Other options retained.')
+        else:details.append('No recognized active SysV defaults integration; startup options left unchanged.')
+        details.append('No GPO/access-provider/login-policy changes in this repair.')
+    else:
+        paths=[SSSD];old={SSSD:read_file(SSSD,True)}
+        # Refuse to override snippet policies implicitly. Main-file changes only.
+        for snippet in sorted((SSSD.parent/'conf.d').glob('*.conf')):
+            entry=read_file(snippet,True)['raw'].decode('utf-8','surrogateescape')
+            if re.search(r'^\s*ad_gpo_ignore_unreadable\s*=',entry,re.M):raise ValueError(f'GPO override in {snippet}; review that snippet manually.')
+        value='true' if phase=='gpo-on' else 'false'
+        new={SSSD:update_ini(old[SSSD]['raw'],'domain/'+domain,dict(ad_gpo_ignore_unreadable=value),must_exist=True)}
+        details=[f'Domain: {domain}; ad_gpo_ignore_unreadable = {value}',
+                 'TRUE skips unreadable GPOs AND THEIR POLICIES; intended restrictions may not be enforced.' if value=='true' else 'FALSE restores fail-closed behavior for unreadable GPOs; domain login may be blocked again.',
+                 'Readable GPO evaluation and other access-provider settings are retained.']
+    changed=[p for p in paths if old[p]['s'] is None or old[p]['raw']!=new[p]]
+    digest=hashlib.sha256((phase+domain+realm+evidence).encode('utf-8','surrogateescape'))
+    for p in paths:
+        s=old[p]['s'];digest.update(str(p).encode());digest.update(old[p]['raw']);digest.update(new[p])
+        digest.update(repr(None if s is None else (s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_mtime_ns)).encode())
+        digest.update(str(p.parent.exists()).encode())
+    return paths,old,new,changed,details,digest.hexdigest()
+
+def stage(p,data,s):
+    fd,name=tempfile.mkstemp(prefix='.jsforge-realmd-',dir=str(p.parent))
+    try:
+        with os.fdopen(fd,'wb') as f:f.write(data);f.flush();os.fsync(f.fileno())
+        os.chown(name,s.st_uid if s else 0,s.st_gid if s else 0)
+        os.chmod(name,stat.S_IMODE(s.st_mode) if s else 0o644)
+        return Path(name)
+    except BaseException:Path(name).unlink(missing_ok=True);raise
+
+def main():
+    paths,old,new,changed,details,token=make_plan()
+    if operation=='plan':
+        print('JS-Forge: Configuration preview ('+phase+')')
+        for line in details:print(line)
+        for p in paths:print(str(p)+': '+('CREATE' if old[p]['s'] is None else 'UPDATE' if p in changed else 'already correct'))
+        if LDAP in paths and not LDAP.parent.exists():print(f'CREATE {LDAP.parent}, root-owned mode 755; existing directory modes retained.')
+        print('Changed existing files get private timestamped backups beside originals. New files: root/644; existing ownership/modes preserved.')
+        print('RESULT='+('CHANGES' if changed else 'UNCHANGED'));print('PLAN_TOKEN='+token);return
+    if expected!=token:raise ValueError('Configuration/capabilities changed after preview. Preview again; nothing applied.')
+    if not changed:print('No file changes required.');return
+    staged={};committed=[];created=False
+    try:
+        if LDAP in paths and not LDAP.parent.exists():
+            LDAP.parent.mkdir(mode=0o755);os.chown(LDAP.parent,0,0);os.chmod(LDAP.parent,0o755);created=True
+        for p in changed:staged[p]=stage(p,new[p],old[p]['s'])
+        suffix=datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'.'+uuid.uuid4().hex[:8]
+        for p in changed:
+            if old[p]['s'] is not None:
+                backup=p.with_name(p.name+'.bak.'+suffix)
+                with backup.open('xb') as f:f.write(old[p]['raw']);f.flush();os.fsync(f.fileno())
+                os.chmod(backup,0o600);print('Backup: '+str(backup))
+        for p in changed:os.replace(staged[p],p);committed.append(p)
+        print('Requested configuration applied. Service restart is separately confirmed by the controller.')
+    except BaseException:
+        for p in reversed(committed):
+            try:
+                if p.read_bytes()!=new[p]:print('ROLLBACK WARNING: externally changed file left untouched: '+str(p),file=sys.stderr);continue
+                if old[p]['s'] is None:p.unlink()
+                else:restore=stage(p,old[p]['raw'],old[p]['s']);os.replace(restore,p)
+                print('Restored pre-edit state: '+str(p),file=sys.stderr)
+            except BaseException as error:print(f'ROLLBACK FAILED for {p}: {error}; use backup.',file=sys.stderr)
+        raise
+    finally:
+        for p in staged.values():p.unlink(missing_ok=True)
+        if created:
+            try:LDAP.parent.rmdir()
+            except OSError:pass
+try:
+    if operation=='apply':
+        fd=os.open(LOCK,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+        with os.fdopen(fd,'w') as lock:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);main()
+    else:main()
+except Exception as error:print('Configuration action stopped: '+str(error),file=sys.stderr);sys.exit(1)
+JSF_CONFIG_PY
+}
+check_domain_context() {
+    local wanted="$1" member
+    local -a memberships=()
+    current_memberships || { echo 'Cannot inspect current membership.'; return 1; }
+    for member in "${memberships[@]}"; do
+        if [ "${member,,}" != "${wanted,,}" ]; then
+            echo 'A different realm is configured; refusing cross-domain configuration changes.'; return 1
+        fi
+    done
+}
+preview_apply_config() {
+    local phase="$1" target="$2" kerberos_realm="$3" preview token rc
+    local -a statuses
+    authorize_root || return 1
+    command -v python3 >/dev/null 2>&1 || { echo 'Install/check integration packages for python3.'; return 1; }
+    check_domain_context "$target" || return 1
+    preview="$(config_helper plan "$phase" "$target" "$kerberos_realm" 2>&1)"; rc=$?
+    printf '%s\n' "$preview" | tee "$work_dir/config-$phase.txt"
+    [ "$rc" = 0 ] || return 1
+    if grep -qx RESULT=UNCHANGED <<< "$preview"; then
+        echo 'Managed settings already match. No files rewritten or new backups created.'; return 0
+    fi
+    token="$(sed -nE 's/^PLAN_TOKEN=([0-9a-f]{64})$/\1/p' <<< "$preview")"
+    [[ "$token" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid preview; no changes applied.'; return 1; }
+    echo 'System-wide settings: keep a working local administrator/console session.'
+    echo 'Approved file edits remain if you later cancel a separate enrollment or restart.'
+    confirm_local 'Apply exactly the displayed configuration changes?' || return 1
+    check_domain_context "$target" || return 1
+    config_helper apply "$phase" "$target" "$kerberos_realm" "$token" 2>&1 | tee -a "$work_dir/config-$phase.txt"
+    statuses=("${PIPESTATUS[@]}")
+    [ "${statuses[0]}" = 0 ] && [ "${statuses[1]}" = 0 ] || {
+        echo 'Configuration/capture failed. Review output/backups; no following restart/join attempted.'; return 1;
+    }
+}
+prepare_auth_for_domain() {
+    local target="$1" kerberos_realm
+    kerberos_realm="$(sed -nE 's/^[[:space:]]*realm-name:[[:space:]]*([^[:space:]]+)[[:space:]]*$/\1/p' "$work_dir/discovery.txt" | head -n 1)"
+    kerberos_realm="${kerberos_realm:-${target^^}}"
+    valid_domain "$kerberos_realm" || { echo 'Cannot determine a safe Kerberos realm.'; return 1; }
+    preview_apply_config auth "$target" "$kerberos_realm"
+}
+prepare_auth_menu() {
+    local domain
+    ensure_packages && authorize_root || { pause_screen; return; }
+    read_domain || return
+    if ! run_read "$work_dir/discovery.txt" realm discover --server-software=active-directory --client-software=sssd --membership-software=adcli "$domain"; then
+        echo 'Discovery failed; no configuration changes attempted.'; pause_screen; return
+    fi
+    if ! grep -Eq '^[[:space:]]*server-software:[[:space:]]*active-directory[[:space:]]*$' "$work_dir/discovery.txt"; then
+        echo 'Active Directory was not confirmed; preparation cancelled.'; pause_screen; return
+    fi
+    prepare_auth_for_domain "$domain"
+    pause_screen
+}
+validate_restart_sssd() {
+    echo 'Checking configuration before any service restart...'
+    if ! run_read "$work_dir/sssd-validation.txt" sssctl config-check; then
+        echo 'Validation failed. Service was NOT restarted. Review configuration/snippets and the saved output.'; return 1
+    fi
+    command -v service >/dev/null 2>&1 || { echo 'Native service command unavailable; no restart attempted.'; return 1; }
+    echo 'Starting/restarting SSSD briefly interrupts domain identity/authentication services.'
+    echo 'Keep your local administrator session open. This does NOT restart LightDM or log you out.'
+    confirm_local 'Start/restart the system-wide SSSD service now?' || return 1
+    run_interactive service sssd restart || return 1
+    run_read "$work_dir/sssd-status.txt" service sssd status
+}
+sssd_compat_for_domain() {
+    local target="$1"
+    echo 'SSSD compatibility repair does not change domain access policy.'
+    preview_apply_config sssd "$target" "${target^^}" || return 1
+    validate_restart_sssd
+}
+sssd_compat_menu() {
+    local selected_domain
+    local -a memberships=()
+    ensure_packages && authorize_root || { pause_screen; return; }
+    choose_joined_domain || { pause_screen; return; }
+    sssd_compat_for_domain "$selected_domain"
+    pause_screen
+}
+gpo_exception_menu() {
+    local selected_domain action phase
+    local -a memberships=()
+    ensure_packages && authorize_root || { pause_screen; return; }
+    choose_joined_domain || { pause_screen; return; }
+    printf '\nDomain: %s\n' "$selected_domain"
+    echo 'This is an ACCESS-POLICY exception, NOT a routine join repair.'
+    echo 'Enabling it skips unreadable GPO containers AND THEIR POLICIES. Intended restrictions may be bypassed.'
+    echo 'Use only after an unreadable-GPO failure is confirmed and you approve the policy exception.'
+    echo 'Prefer repairing GPO attributes/permissions on the domain controller.'
+    echo 'Readable GPOs and other access rules are retained. No permit-all, permissive mode, or sudo grants.'
+    echo 'Disabling it restores failure on unreadable GPOs and may block domain logins again.'
+    cursor_menu 'Unreadable-GPO exception:' action 'Cancel' 'Enable exception - skip unreadable GPOs' 'Disable exception - enforce readable policy requirement' || return
+    case "$action" in
+        'Enable exception - skip unreadable GPOs') phase=gpo-on ;;
+        'Disable exception - enforce readable policy requirement') phase=gpo-off ;;
+        *) return ;;
+    esac
+    preview_apply_config "$phase" "$selected_domain" "${selected_domain^^}" || { pause_screen; return; }
+    validate_restart_sssd
+    echo 'Use the login-check menu to test the actual PAM service; success there is not a full desktop-session test.'
+    pause_screen
+}
+sssd_login_checks() {
+    local account action service_name
+    local -a status
+    ensure_packages && authorize_root || { pause_screen; return; }
+    read -r -p 'Fully qualified domain account (empty cancels): ' account || return
+    valid_text "$account" && [[ "$account" != -* ]] || return
+    cursor_menu 'PAM account-check service:' action 'Cancel' 'LightDM' 'Console login' 'SSH' 'XRDP (xrdp-sesman)' 'Custom PAM service' || return
+    case "$action" in
+        LightDM) service_name=lightdm ;;
+        'Console login') service_name=login ;;
+        SSH) service_name=sshd ;;
+'XRDP (xrdp-sesman)') service_name=xrdp-sesman ;;
+        'Custom PAM service') read -r -p 'Existing PAM service name (empty cancels): ' service_name || return ;;
+        *) return ;;
+    esac
+    [[ "$service_name" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "/etc/pam.d/$service_name" ] || {
+        echo 'No matching PAM service file. No account check attempted.'; pause_screen; return;
+    }
+    {
+        echo 'JS-Forge: Domain Login Readiness'
+        echo 'Identity lookup:'
+        getent passwd "$account"; printf 'getent exit status: %s\n' "$?"
+        id -- "$account"; printf 'id exit status: %s\n' "$?"
+        echo 'System-wide SSSD status:'
+        as_root service sssd status
+        echo 'PAM ACCOUNT/AUTHORIZATION check only (not password or session creation):'
+        as_root env LC_ALL=C sssctl user-checks -a acct -s "$service_name" "$account"
+        echo 'Read pam_acct_mgmt result; the tool may also report a separate InfoPipe warning.'
+        echo 'A successful account check is not proof that a graphical session/home creation will succeed.'
+    } 2>&1 | tee "$work_dir/login-check.txt"
+    pause_screen
+}
+show_notes() {
+    cat > "$work_dir/notes.txt" <<'NOTES'
+JS-Forge: Active Directory Manager (APT)
+
+realmd + SSSD + adcli. No Winbind, IPA, arbitrary Kerberos, or Samba server setup.
+Keep a working LOCAL administrator/console session. Enrollment, identity lookup,
+password authentication, account authorization, and desktop session startup are
+separate stages. No automatic reboot, leave/rejoin, cache purge, or sudo grants.
+Explicit domain sudo and targeted cleanup actions have separate menus/approval.
+
+Auth preparation: confirmed default_realm, rdns=false, and LDAP SASL_NOCANON on.
+Missing /etc/ldap is created root-owned mode 755; an existing directory's mode
+is retained. New files are root-owned mode 644; existing file modes/ownership
+are retained. Backups are private, timestamped, beside changed original files.
+Idempotent: already-matching files are not rewritten or backed up again.
+Unrelated settings are retained. Unsupported symlinks, hard links, include-based
+conflicts, nested sections, or dynamic DAEMON_OPTS require manual review.
+Python's standard library handles structured edits; no third-party modules.
+
+After enrollment, optional SSSD repair checks the installed validator before
+commenting obsolete config_file_version. On recognized non-systemd SysV setups,
+it removes standalone -f only if the installed SSSD help does not support it,
+and selects --logger=files when available. Other options are preserved. The
+init script is NOT edited. Native 'service sssd restart' has separate approval
+and runs only after configuration validation. Package/init integration still
+needs to function; no custom service managers or systemctl assumptions.
+
+XRDP domain login is a separate optional Domain access action. It maps
+xrdp-sesman to remote-interactive AD logon rights without disabling GPO policy.
+One removable root/0600 managed snippet preserves existing custom mappings.
+Existing manual mappings are recognized; main-file settings are not rewritten.
+Validation and a separately approved SSSD restart precede live login testing.
+Removing the snippet does not remove manual mappings or guarantee revocation.
+Naming policy, PAM, .xsession and XRDP package/service setup are not changed.
+
+GPO exception is SEPARATE, NEVER automatically enabled during join/repair.
+ad_gpo_ignore_unreadable=true skips unreadable GPO containers and their policies.
+This can bypass intended login restrictions. Use only with informed approval;
+fix the GPO on the DC, then disable the exception (false). Readable GPO evaluation
+and other access rules remain. GPO options in conf.d snippets require review.
+No ad_gpo_access_control=permissive/disabled or realm permit --all is applied.
+
+File-commit failures attempt local rollback; this is not an enrollment/package
+rollback. Approved edits remain if a later join or restart is cancelled/fails.
+Avoid editing the same files concurrently. No authentication changes on startup.
+
+Home-directory creation is a separate system-wide packaged PAM opt-in action.
+No arbitrary PAM-file rewrites, automatic home deletion, DNS/hostname/time edits,
+firewall changes, or domain-controller modifications are provided.
+
+Passwords are entered into native prompts, not collected or stored. Reports
+exclude raw SSSD configs/logs, keytabs, caches, and backups; they can include
+account/domain identifiers, policy settings, and backup paths. Review sharing.
+Interactive password-bearing command output is intentionally not captured.
+
+Leave deconfigures locally without --remove; it is not a credential secure erase
+and does not explicitly delete the AD computer account or home directories.
+Group membership management has explicit DOMAIN and LOCAL actions. DOMAIN uses
+native net RPC; LOCAL uses gpasswd on files-source groups and canonical NSS users.
+No samba-tool requirement and no domain/local automatic fallback. Dependencies
+are checked only for the chosen action. Native credentials/permissions apply.
+All writes show exact scope/targets and require separate confirmation.
+
+New opt-in tools:
+- Domain sudo: one JS-Forge-managed group grant, password-required rule, private
+  backups, staged validation, full-policy post-check and attempted rollback.
+  Existing sudo policy may independently grant NOPASSWD or other privileges.
+  Does not create AD groups. Supports plain names/spaces and group@domain;
+  ambiguous/unqualified SSSD results or complex syntax require manual review.
+- Targeted cleanup: inspect identity/processes, TERM/KILL a target domain UID,
+  destroy its default Kerberos cache collection, remove its sudo timestamps,
+  or expire its SSSD USER identity record. Actions are separate. Root/system,
+  local UID collisions, and the invoking administrator are refused.
+  This is NOT complete offboarding: custom ticket caches/session keyrings,
+  remote sessions, copied tickets, cached passwords, group records, and other
+  access paths may remain. No per-user offline-password purge is promised.
+  Disable AD access first. No home deletion or global SSSD database wipe.
+  Ticket principals/process names and sudo policy listings can appear in reports.
+  Install native procps/util-linux tools if a cleanup command is unavailable.
+
+Graphical administrator authentication (polkit 126 only):
+Explicit domain users are added one at a time. Existing conventional literal-array
+administrator identities are retained as a snapshot; complex/dynamic rules require
+manual review. This is system-wide administrator authentication, not just cosmetic
+Synaptic user-list editing. No password bypass, PAM changes, or service restart.
+A deterministic JavaScript template is used; no generic on-host JS validator is
+required. Successful file verification does NOT prove live daemon/PAM/UI success.
+Private backups are outside rule directories. Removal touches only the managed rule.
+Review after upstream admin-policy changes; existing cached authorizations remain.
+
+Short domain usernames (opt-in, single directly configured AD domain):
+One removable 0600 SSSD snippet allows short input and preserves qualified output.
+Current local/domain name collisions, offline state, custom formats and conflicting
+settings are refused. A selected domain identity is captured before the change;
+post-restart short/qualified lookups must preserve name, UID/GID, home, shell,
+primary-group name and group IDs. This is not password/PAM/desktop testing of all
+users. Keep a distinctly named local administrator. No home moves or cache purge.
+Apply and native SSSD restart have separate confirmations. Cancellation may leave
+a pending validated file change. Disable removes only this snippet and restores
+underlying settings; validation runs before a separately approved restart.
+NOTES
+    view_file "$work_dir/notes.txt"
+}
+
+# Managed domain sudo policy; never edits AD or the main sudoers file.
+sudo_policy_helper() {
+    as_root env PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C python3 - "$@" <<'JSF_SUDO_PY'
+import os,sys,re,stat,subprocess,tempfile,hashlib,fcntl,datetime,uuid
+from pathlib import Path
+os.umask(0o077)
+BASE=Path('/etc/sudoers.d'); TARGET=BASE/'jsforge-domain-sudo'; MAIN=Path('/etc/sudoers')
+MARK='# JS-Forge managed domain sudo grant v1\n'
+BACK=Path('/var/backups/JS-Forge/domain-sudo')
+operation,action,domain,entry=sys.argv[1:5]
+expected=sys.argv[5] if len(sys.argv)>5 else ''
+if os.geteuid()!=0:sys.exit('Root authorization required.')
+if operation not in ('plan','apply','show') or action not in ('grant','remove','show'):sys.exit('Invalid operation.')
+def trusted(p,directory=False):
+    st=p.lstat()
+    if p.is_symlink() or st.st_uid!=0 or st.st_mode&0o022:raise ValueError('Unsafe ownership, permissions or symlink: '+str(p))
+    if directory and not stat.S_ISDIR(st.st_mode):raise ValueError('Not a directory: '+str(p))
+    if not directory and (not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or st.st_size>1048576):raise ValueError('Unsafe file: '+str(p))
+    return st
+
+def check(args):
+    result=subprocess.run(args,capture_output=True,text=True,timeout=30)
+    if result.returncode:raise ValueError('Command failed: '+repr(args)+'\n'+result.stdout+result.stderr)
+    return result.stdout
+
+def baseline():
+    trusted(Path('/etc'),True);trusted(BASE,True);trusted(MAIN)
+    main=MAIN.read_bytes()
+    if not re.search(rb'^\s*(?:@includedir|#includedir)\s+(?:"/etc/sudoers.d"|/etc/sudoers.d)\s*(?:#.*)?$',main,re.M):
+        raise ValueError('No direct /etc/sudoers.d inclusion found in /etc/sudoers; manual review required.')
+    check(['visudo','-c'])
+    old=None
+    if TARGET.exists() or TARGET.is_symlink():
+        trusted(TARGET);old=TARGET.read_bytes()
+        if not old.startswith(MARK.encode()):raise ValueError('Existing file is not JS-Forge managed; refusing to overwrite/remove.')
+    return old
+
+def resolve():
+    if not re.fullmatch(r'[A-Za-z0-9.-]+',domain) or '.' not in domain:raise ValueError('Invalid selected domain.')
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_. @-]{0,254}',entry):
+        raise ValueError('Use a plain group name (spaces supported) or group@domain. Other syntax requires manual review.')
+    name=entry if '@' in entry else entry+'@'+domain
+    if name.count('@')!=1 or name.rsplit('@',1)[1].lower()!=domain.lower():raise ValueError('Group must belong to the selected domain.')
+    output=check(['getent','-s','sss','group',name]).strip().splitlines()
+    if len(output)!=1:raise ValueError('SSSD group resolution was empty or ambiguous.')
+    fields=output[0].split(':')
+    if len(fields)!=4 or not fields[2].isdigit():raise ValueError('Invalid SSSD group record.')
+    canonical,gid=fields[0],fields[2]
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_. @-]{0,254}',canonical):raise ValueError('Resolved group requires unsupported escaping; manual review required.')
+    if '@' not in canonical or canonical.rsplit('@',1)[1].lower()!=domain.lower():raise ValueError('SSSD did not return a domain-qualified group; manual review required.')
+    normal=check(['getent','group',canonical]).strip().splitlines()
+    if len(normal)!=1 or normal[0].split(':')[:3]!=fields[:3]:raise ValueError('NSS group resolution differs from SSSD; refusing ambiguous grant.')
+    if int(gid)==0:raise ValueError('Refusing GID 0.')
+    escaped=canonical.replace(' ','\\ ')
+    data=(MARK+'# Domain: '+domain+'\n# Group: '+canonical+'; GID at approval: '+gid+'\n%'+escaped+' ALL=(ALL:ALL) PASSWD: ALL\n').encode()
+    return data,canonical,gid
+
+def stage(data):
+    fd,name=tempfile.mkstemp(prefix='.jsforge-sudo-',dir=str(BASE))
+    try:
+        with os.fdopen(fd,'wb') as f:f.write(data);f.flush();os.fsync(f.fileno())
+        os.chown(name,0,0);os.chmod(name,0o440)
+        return Path(name)
+    except BaseException:Path(name).unlink(missing_ok=True);raise
+
+def backup(old):
+    for p in (Path('/var'),Path('/var/backups')):trusted(p,True)
+    for p in (BACK.parent,BACK):
+        if not p.exists():p.mkdir(mode=0o700)
+        trusted(p,True)
+        if p.stat().st_mode&0o077:raise ValueError('Backup directory must be private: '+str(p))
+    p=BACK/(datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex+'.sudoers-backup')
+    with p.open('xb') as f:f.write(old);f.flush();os.fsync(f.fileno())
+    os.chmod(p,0o600);print('Private backup: '+str(p))
+
+def main():
+    old=baseline()
+    if operation=='show':
+        print(old.decode() if old is not None else 'No JS-Forge-managed sudo grant.');return
+    new=None;identity=''
+    if action=='grant':
+        new,name,gid=resolve();identity=name+':'+gid
+        staged=stage(new)
+        try:check(['visudo','-c','-f',str(staged)])
+        finally:staged.unlink(missing_ok=True)
+    elif action!='remove':raise ValueError('Invalid change action.')
+    token=hashlib.sha256((action+'\0'+domain+'\0'+identity).encode()+b'\0'+(old or b'')+b'\0'+(new or b'')+MAIN.read_bytes()).hexdigest()
+    if operation=='plan':
+        print('Managed file: '+str(TARGET));print('Current grant:\n'+(old.decode() if old else '(none)'))
+        print('Proposed grant:\n'+(new.decode() if new else '(remove managed grant only)'))
+        print('Password required by this rule; other sudo rules can independently grant access or NOPASSWD.')
+        print('Full root-equivalent access. No AD group or membership is created/modified.')
+        print('RESULT='+('UNCHANGED' if old==new else 'CHANGES'));print('PLAN_TOKEN='+token);return
+    if expected!=token:raise ValueError('Policy/group changed since preview; preview again.')
+    if old==new:print('Already matches; nothing changed.');return
+    if old is not None:backup(old)
+    staged=None;committed=False
+    try:
+        if new is not None:staged=stage(new);os.replace(staged,TARGET)
+        else:TARGET.unlink()
+        committed=True
+        check(['visudo','-c'])
+        print('Managed sudo grant updated; complete sudoers validation passed.')
+    except BaseException:
+        if committed:
+            if new is not None and (not TARGET.exists() or TARGET.read_bytes()!=new):
+                print('ROLLBACK WARNING: concurrent modification; use private backup.',file=sys.stderr)
+            elif new is None and TARGET.exists():
+                print('ROLLBACK WARNING: concurrent replacement; use private backup.',file=sys.stderr)
+            else:
+                if old is None:TARGET.unlink(missing_ok=True)
+                else:
+                    restore=stage(old);os.replace(restore,TARGET)
+                print('Previous managed policy restored.',file=sys.stderr)
+        raise
+    finally:
+        if staged is not None:staged.unlink(missing_ok=True)
+try:
+    trusted(Path('/etc'),True)
+    fd=os.open('/etc/.jsforge-domain-sudo.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as lock:
+        if os.fstat(lock.fileno()).st_uid!=0:raise ValueError('Unsafe lock owner.')
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);main()
+except Exception as e:print('Sudo policy action stopped: '+str(e),file=sys.stderr);sys.exit(1)
+JSF_SUDO_PY
+}
+
+sudo_policy_change() {
+    local action="$1" domain="$2" group="$3" preview token rc
+    local -a status
+    preview="$(sudo_policy_helper plan "$action" "$domain" "$group" 2>&1)"; rc=$?
+    printf '%s\n' "$preview" | tee "$work_dir/domain-sudo.txt"
+    [ "$rc" = 0 ] || return 1
+    if grep -qx 'RESULT=UNCHANGED' <<< "$preview"; then echo 'No change required.'; return 0; fi
+    token="$(sed -nE 's/^PLAN_TOKEN=([0-9a-f]{64})$/\1/p' <<< "$preview")"
+    [[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
+    echo 'Keep a LOCAL administrator/root console open. Other sudo grants are not removed.'
+    confirm_local 'Apply exactly the displayed domain sudo change?' || return 1
+    if [ "$action" = grant ]; then check_domain_context "$domain" || return 1; fi
+    sudo_policy_helper apply "$action" "$domain" "$group" "$token" 2>&1 | tee -a "$work_dir/domain-sudo.txt"
+    status=("${PIPESTATUS[@]}")
+    [ "${status[0]}" = 0 ] && [ "${status[1]}" = 0 ]
+}
+domain_sudo_menu() {
+    local action selected_domain group account tool
+    local -a memberships=()
+    ensure_packages && authorize_root || { pause_screen; return; }
+    for tool in visudo sudo getent; do
+        command -v "$tool" >/dev/null 2>&1 || { echo "Missing native tool: $tool"; pause_screen; return; }
+    done
+    while :; do
+        cursor_menu 'Domain sudo access:' action 'View managed grant' 'Add / replace group grant' 'Test user sudo policy' 'Remove managed grant' 'Back' || return
+        case "$action" in
+            'View managed grant') sudo_policy_helper show show unused unused; pause_screen ;;
+            'Add / replace group grant')
+                choose_joined_domain || { pause_screen; continue; }
+                echo 'Suggested AD group: Domain-Sudo-Admins (create/manage membership in AD first).'
+                echo 'Type an existing group, e.g. Domain-Sudo-Admins, or group@domain. Empty cancels.'
+                read -r -p 'Domain group: ' group || return
+                [ -n "$group" ] || continue
+                sudo_policy_change grant "$selected_domain" "$group"; pause_screen ;;
+            'Test user sudo policy')
+                read -r -p 'Fully qualified domain account (empty cancels): ' account || return
+                valid_text "$account" && [[ "$account" != -* && "$account" = *@* ]] || continue
+                run_read "$work_dir/sudo-user-check.txt" sudo -l -U "$account"
+                echo 'Policy listing only: not a password, offline authentication, or fresh-session membership test.'
+                echo 'Other matching rules can independently grant access or waive passwords.'
+                pause_screen ;;
+            'Remove managed grant')
+                echo 'Removes ONLY /etc/sudoers.d/jsforge-domain-sudo; no AD membership changes.'
+                sudo_policy_change remove unused unused; pause_screen ;;
+            *) return ;;
+        esac
+    done
+}
+cleanup_helper() {
+    as_root env PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C python3 - "$@" <<'JSF_CLEANUP_PY'
+import os,sys,re,subprocess,pwd,hashlib
+operation,action,domain,account,invoker=sys.argv[1:6]
+expected=sys.argv[6] if len(sys.argv)>6 else ''
+ACTIONS={'inspect','tickets','sudo-time','identity','term','kill'}
+if os.geteuid()!=0 or operation not in ('plan','apply') or action not in ACTIONS:sys.exit('Invalid cleanup request.')
+def run(args,allowed=(0,)):
+    p=subprocess.run(args,text=True,capture_output=True,timeout=30)
+    print(p.stdout,end='');print(p.stderr,end='',file=sys.stderr)
+    if p.returncode not in allowed:raise ValueError('Command failed, exit '+str(p.returncode)+': '+repr(args))
+    return p.returncode
+
+def main():
+    if not re.fullmatch(r'[A-Za-z0-9.-]+',domain) or '.' not in domain:raise ValueError('Invalid domain.')
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,254}',account) or account.count('@')!=1 or account.rsplit('@',1)[1].lower()!=domain.lower():
+        raise ValueError('Enter a domain-qualified account (user@selected.domain).')
+    p=subprocess.run(['getent','-s','sss','passwd',account],capture_output=True,text=True,timeout=20)
+    rows=p.stdout.strip().splitlines()
+    if p.returncode or len(rows)!=1:raise ValueError('Cannot unambiguously resolve the SSSD account; no UID guessing.')
+    fields=rows[0].split(':')
+    if len(fields)!=7:raise ValueError('Invalid SSSD identity record.')
+    name,uid,gid,home=fields[0],int(fields[2]),int(fields[3]),fields[5]
+    if name.count('@')!=1 or name.rsplit('@',1)[1].lower()!=domain.lower():raise ValueError('Canonical identity is not domain-qualified.')
+    actual=pwd.getpwnam(name)
+    if (actual.pw_uid,actual.pw_gid,actual.pw_dir)!=(uid,gid,home):raise ValueError('NSS/SSSD identity mismatch.')
+    if uid<1000 or uid==int(invoker):raise ValueError('Refusing root/system UID or the invoking administrator.')
+    local=subprocess.run(['getent','-s','files','passwd',str(uid)],capture_output=True,text=True,timeout=10)
+    if local.returncode==0 and local.stdout.strip():raise ValueError('UID also belongs to a local account; manual review required.')
+    token=hashlib.sha256(('\0'.join((action,domain,rows[0],invoker))).encode()).hexdigest()
+    descriptions={
+        'inspect':'Inspect processes, default Kerberos cache collection, and effective sudo policy (no changes).',
+        'tickets':'Destroy tickets in the target UID default Kerberos cache collection (kdestroy -A).',
+        'sudo-time':'Remove target UID sudo authentication timestamps (sudo -K).',
+        'identity':'Expire ONLY this SSSD user identity record. DOES NOT delete cached passwords or revoke offline access.',
+        'term':'Send SIGTERM to ALL processes owned by this UID. Unsaved work can be lost.',
+        'kill':'Send SIGKILL to ALL processes owned by this UID. Forced termination; unsaved work WILL be lost.'}
+    print('Target: '+name+'; UID='+str(uid)+'; GID='+str(gid)+'; home='+home)
+    print(descriptions[action])
+    print('This does not disable AD, delete the home, erase all credentials, cancel remote tickets, or prevent a new login.')
+    if operation=='plan':print('PLAN_TOKEN='+token);return
+    if token!=expected:raise ValueError('Identity changed after preview; cancelled.')
+    env=['env','-i','PATH=/usr/sbin:/usr/bin:/sbin:/bin','HOME='+home,'USER='+name,'LOGNAME='+name]
+    def usercmd(args):return ['runuser','-u',name,'--']+env+args
+    if action=='inspect':
+        run(['ps','-u',str(uid),'-o','pid=,ppid=,comm='],(0,1))
+        print('Default ticket collection (may be empty):')
+        run(usercmd(['klist','-A']),(0,1))
+        print('Effective sudo policy:')
+        run(['sudo','-l','-U',name],(0,1))
+    elif action=='tickets':
+        run(usercmd(['kdestroy','-A']))
+        print('Default collection command completed. Custom KRB5CCNAME caches, other session keyrings, and copies elsewhere may remain.')
+    elif action=='sudo-time':run(usercmd(['sudo','-K']))
+    elif action=='identity':run(['sss_cache','-u',name])
+    else:
+        rc=run(['pkill','-TERM' if action=='term' else '-KILL','-u',str(uid)],(0,1))
+        if rc==1:print('No matching processes at execution time.')
+        print('Remaining processes (if any):');run(['ps','-u',str(uid),'-o','pid=,ppid=,comm='],(0,1))
+try:main()
+except Exception as e:print('Cleanup stopped: '+str(e),file=sys.stderr);sys.exit(1)
+JSF_CLEANUP_PY
+}
+
+cleanup_menu() {
+    local action operation selected_domain account preview token rc
+    local origin_uid="${SUDO_UID:-$UID}"
+    local -a memberships=() status
+    ensure_packages && authorize_root || { pause_screen; return; }
+    echo 'Targeted LOCAL cleanup, not complete offboarding or guaranteed access revocation.'
+    echo 'Disable access in AD first. Offline credential caches can still allow disconnected logins.'
+    echo 'SSSD expiration is NOT cached-password deletion. No blanket database/cache purge is offered.'
+    echo 'No homes, keytabs, machine credentials, or AD objects will be deleted.'
+    echo 'Ticket cleanup covers only the target default cache collection, not every custom/session cache.'
+    choose_joined_domain || { pause_screen; return; }
+    read -r -p 'Target domain user (user@domain; empty cancels): ' account || return
+    [ -n "$account" ] || return
+    while :; do
+        cursor_menu 'Targeted user cleanup:' action 'Inspect target' 'Terminate target processes (TERM)' 'Force terminate target processes (KILL)' 'Destroy default Kerberos ticket collection' 'Clear sudo authentication timestamps' 'Expire SSSD identity record (NOT credentials)' 'Back' || return
+        case "$action" in
+            'Inspect target') operation=inspect ;;
+            'Terminate target processes (TERM)') operation=term ;;
+            'Force terminate target processes (KILL)') operation=kill ;;
+            'Destroy default Kerberos ticket collection') operation=tickets ;;
+            'Clear sudo authentication timestamps') operation=sudo-time ;;
+            'Expire SSSD identity record (NOT credentials)') operation=identity ;;
+            *) return ;;
+        esac
+        check_domain_context "$selected_domain" || { pause_screen; return; }
+        preview="$(cleanup_helper plan "$operation" "$selected_domain" "$account" "$origin_uid" 2>&1)"; rc=$?
+        printf '%s\n' "$preview" | tee "$work_dir/cleanup-preview.txt"
+        [ "$rc" = 0 ] || { pause_screen; continue; }
+        token="$(sed -nE 's/^PLAN_TOKEN=([0-9a-f]{64})$/\1/p' <<< "$preview")"
+        [[ "$token" =~ ^[0-9a-f]{64}$ ]] || { pause_screen; continue; }
+        if [ "$operation" != inspect ]; then
+            confirm_local 'Perform ONLY this displayed cleanup action for this target UID?' || continue
+        fi
+        cleanup_helper apply "$operation" "$selected_domain" "$account" "$origin_uid" "$token" 2>&1 | tee "$work_dir/cleanup-last.txt"
+        status=("${PIPESTATUS[@]}")
+        if [ "${status[0]}" != 0 ] || [ "${status[1]}" != 0 ]; then echo 'Action/capture failed; review output. No further action is automatic.'; fi
+        pause_screen
+    done
+}
+status_menu() {
+    local action
+    while :; do
+        cursor_menu 'Status and login readiness:' action 'View current membership' 'Test domain user lookup' 'Check login readiness (PAM account)' 'Check DNS / time / hostname' 'Back' || return
+        case "$action" in
+            'View current membership') show_membership ;;
+            'Test domain user lookup') test_identity ;;
+            'Check login readiness (PAM account)') sssd_login_checks ;;
+            'Check DNS / time / hostname') diagnostics ;;
+            *) return ;;
+        esac
+    done
+}
+enrollment_menu() {
+    local action
+    while :; do
+        cursor_menu 'Enrollment and setup:' action 'Install / check integration packages' 'Discover Active Directory domain' 'Prepare Kerberos / LDAP' 'Join domain' 'Enable home creation at login' 'Leave domain' 'Back' || return
+        case "$action" in
+            'Install / check integration packages') ensure_packages; pause_screen ;;
+            'Discover Active Directory domain') discover_domain ;;
+            'Prepare Kerberos / LDAP') prepare_auth_menu ;;
+            'Join domain') join_domain ;;
+            'Enable home creation at login') enable_homes ;;
+            'Leave domain') leave_domain ;;
+            *) return ;;
+        esac
+    done
+}
+
+# Explicit graphical administrator identities (polkit 126 JavaScript backend).
+graphical_admin_helper() {
+    as_root env PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C python3 - "$@" <<'JSF_POLKIT_PY'
+import os,sys,re,stat,json,ast,hashlib,tempfile,subprocess,fcntl,datetime,uuid
+from pathlib import Path
+os.umask(0o077)
+DIRS=[Path('/etc/polkit-1/rules.d'),Path('/run/polkit-1/rules.d'),Path('/usr/local/share/polkit-1/rules.d'),Path('/usr/share/polkit-1/rules.d')]
+TARGET=DIRS[0]/'00-jsforge-domain-admins.rules'
+BACK=Path('/var/backups/JS-Forge/polkit-admins')
+LOCK=Path('/etc/.jsforge-domain-polkit.lock')
+MARK='// JS-Forge managed graphical administrators v1\n'
+operation,action,domain,account=sys.argv[1:5]
+expected=sys.argv[5] if len(sys.argv)>5 else ''
+if os.geteuid()!=0 or operation not in ('show','list','plan','apply') or action not in ('show','add','remove','clear'):sys.exit('Invalid graphical-admin request.')
+def checked(args):
+    r=subprocess.run(args,capture_output=True,text=True,timeout=30)
+    if r.returncode:raise ValueError('Lookup/check failed (exit '+str(r.returncode)+'): '+repr(args)+'\n'+r.stdout+r.stderr)
+    return r.stdout
+
+def trusted(p,directory=False):
+    # Check every ancestor; /usr may be on its own filesystem, but no path component may be a symlink.
+    for parent in reversed(p.parents):
+        st=parent.lstat()
+        if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid!=0 or st.st_mode&0o022:raise ValueError('Unsafe ancestor: '+str(parent))
+    st=p.lstat()
+    if p.is_symlink() or st.st_uid!=0 or st.st_mode&0o022:raise ValueError('Unsafe ownership/permissions/symlink: '+str(p))
+    if directory:
+        if not stat.S_ISDIR(st.st_mode):raise ValueError('Not a directory: '+str(p))
+    elif not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or st.st_size>1048576:raise ValueError('Unsafe rule file: '+str(p))
+    return st
+
+def render(data):
+    identities=list(dict.fromkeys(data['baseline']+['unix-user:'+u['name'] for u in data['users']]))
+    return (MARK+'// JSF_DATA: '+json.dumps(data,sort_keys=True,separators=(',',':'))+'\n'
+        +'// Explicit administrative identities; action authentication requirements are unchanged.\n'
+        +'// Local baseline is a snapshot; review this grant after upstream admin-policy changes.\n'
+        +'polkit.addAdminRule(function(action, subject) {\n'
+        +'    return '+json.dumps(identities,ensure_ascii=True)+';\n});\n').encode()
+
+def managed():
+    if not TARGET.exists() and not TARGET.is_symlink():return None,dict(baseline=[],users=[])
+    trusted(TARGET);raw=TARGET.read_bytes()
+    if not raw.startswith(MARK.encode()):raise ValueError('Existing target is not JS-Forge managed; refusing changes.')
+    lines=raw.decode('utf-8').splitlines()
+    if len(lines)<2 or not lines[1].startswith('// JSF_DATA: '):raise ValueError('Missing managed metadata; manual review required.')
+    data=json.loads(lines[1][13:])
+    if set(data)!= {'baseline','users'} or not isinstance(data['baseline'],list) or not isinstance(data['users'],list):raise ValueError('Invalid managed metadata.')
+    if len(data['baseline'])>128 or len(data['users'])>64:raise ValueError('Oversized managed identity list.')
+    for identity in data['baseline']:
+        if not isinstance(identity,str) or not re.fullmatch(r'unix-(?:user|group|netgroup):[A-Za-z0-9_. @\\-]+',identity):raise ValueError('Unsupported baseline identity.')
+    names=set()
+    for u in data['users']:
+        if not isinstance(u,dict) or set(u)!={'name','uid','domain'} or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,254}',u['name']) or not isinstance(u['uid'],int) or u['uid']<1000 or not isinstance(u['domain'],str) or u['name'] in names:raise ValueError('Invalid managed user metadata.')
+        names.add(u['name'])
+    if render(data)!=raw:raise ValueError('Managed file has manual/unsupported modifications; refusing overwrite.')
+    return raw,data
+
+def policy_files():
+    rows=[]
+    for rank,d in enumerate(DIRS):
+        if d.exists() or d.is_symlink():
+            trusted(d,True)
+            for p in d.glob('*.rules'):
+                if p==TARGET:continue
+                st=trusted(p);rows.append((p.name,rank,p,p.read_bytes(),st))
+    return sorted(rows,key=lambda x:(x[0],x[1]))
+
+def baseline(rows):
+    first=None;source=''
+    pattern=r'polkit\s*\.\s*addAdminRule\s*\(\s*function\s*\(\s*action\s*,\s*subject\s*\)\s*\{\s*return\s*(\[[^\]]*\])\s*;?\s*\}\s*\)\s*;?'
+    for name,rank,p,raw,st in rows:
+        text=raw.decode('utf-8')
+        # Only a complete conventional literal-array admin rule is accepted; never evaluate arbitrary JS.
+        clean=re.sub(r'/\*.*?\*/|//[^\n]*','',text,flags=re.S).strip()
+        if 'addAdminRule' not in clean:continue
+        m=re.fullmatch(pattern,clean,re.S)
+        if not m:raise ValueError('Custom/dynamic administrator policy requires manual review: '+str(p))
+        identities=ast.literal_eval(m.group(1))
+        if not isinstance(identities,list) or not identities or len(identities)>128:raise ValueError('Unsupported administrator identity array: '+str(p))
+        for v in identities:
+            if not isinstance(v,str) or not re.fullmatch(r'unix-(?:user|group|netgroup):[A-Za-z0-9_. @\\-]+',v):raise ValueError('Unsupported administrator identity in '+str(p))
+        if first is None:first=list(dict.fromkeys(identities));source=str(p)
+        if (TARGET.name,0)>=(name,rank):raise ValueError('Existing administrator rule runs before the managed filename; manual review: '+str(p))
+    if first is None:raise ValueError('No conventional administrator rule found; refusing to guess local administrator identities.')
+    return first,source
+
+def resolve(domain,entry):
+    if not re.fullmatch(r'[A-Za-z0-9.-]+',domain) or '.' not in domain:raise ValueError('Invalid selected domain.')
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,254}',entry):raise ValueError('Enter a simple user name or user@domain (not a shell command).')
+    name=entry if '@' in entry else entry+'@'+domain
+    if name.count('@')!=1 or name.rsplit('@',1)[1].lower()!=domain.lower():raise ValueError('Account must belong to the selected domain.')
+    rows=checked(['getent','-s','sss','passwd',name]).strip().splitlines()
+    if len(rows)!=1:raise ValueError('Empty/ambiguous SSSD identity lookup.')
+    f=rows[0].split(':')
+    if len(f)!=7 or not f[2].isdigit() or not f[3].isdigit():raise ValueError('Invalid SSSD passwd record.')
+    canonical=f[0];uid=int(f[2])
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,254}',canonical) or canonical.count('@')!=1 or canonical.rsplit('@',1)[1].lower()!=domain.lower() or uid<1000:raise ValueError('Unsafe/system or non-qualified SSSD identity.')
+    normal=checked(['getent','passwd',canonical]).strip().splitlines()
+    if len(normal)!=1 or normal[0].split(':')[:4]!=f[:4]:raise ValueError('Normal NSS lookup differs from SSSD.')
+    local=subprocess.run(['getent','-s','files','passwd',str(uid)],capture_output=True,text=True,timeout=20)
+    if local.returncode==0 and local.stdout.strip():raise ValueError('UID collides with a local account.')
+    if local.returncode not in (0,2):raise ValueError('Could not safely check for a local UID collision.')
+    return dict(name=canonical,uid=uid,domain=domain.lower())
+
+def stage(raw):
+    fd,name=tempfile.mkstemp(prefix='.jsforge-polkit-',suffix='.tmp',dir=str(TARGET.parent))
+    try:
+        with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+        os.chown(name,0,0);os.chmod(name,0o644)
+        return Path(name)
+    except BaseException:Path(name).unlink(missing_ok=True);raise
+
+def backup(raw):
+    for p in (Path('/var'),Path('/var/backups')):trusted(p,True)
+    for p in (BACK.parent,BACK):
+        if not p.exists():p.mkdir(mode=0o700)
+        trusted(p,True)
+        if p.stat().st_mode&0o077:raise ValueError('Backup directory is not private: '+str(p))
+    name=BACK/(datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex+'.rules-backup')
+    with name.open('xb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+    os.chmod(name,0o600);print('Private backup: '+str(name))
+
+def main():
+    trusted(TARGET.parent,True)
+    old,data=managed()
+    if operation=='list':
+        for u in data['users']:print(u['name'])
+        return
+    if operation=='show':
+        print('Managed rule: '+str(TARGET))
+        print(old.decode() if old else 'No JS-Forge graphical administrator grant.')
+        rows=policy_files()
+        try:
+            base,source=baseline(rows)
+            print('Current underlying admin baseline: '+repr(base)+' from '+source)
+            if old and base!=data['baseline']:print('WARNING: upstream baseline changed; review/reapply managed identities.')
+        except ValueError as e:print('Baseline review warning: '+str(e))
+        return
+    rows=policy_files();source=''
+    if action=='add':
+        base,source=baseline(rows)
+        user=resolve(domain,account)
+        users=[dict(u) for u in data['users']]
+        previous=next((u for u in users if u['name']==user['name']),None)
+        if previous and previous['uid']!=user['uid']:raise ValueError('Managed account UID changed; remove old grant and review before re-adding.')
+        if previous is None:users.append(user)
+        if len(users)>64:raise ValueError('At most 64 explicitly managed identities.')
+        newdata=dict(baseline=base,users=sorted(users,key=lambda u:u['name']))
+        new=render(newdata)
+    elif action=='remove':
+        users=[dict(u) for u in data['users'] if u['name']!=account]
+        if len(users)==len(data['users']):raise ValueError('Account is not in the managed list.')
+        if users:
+            base,source=baseline(rows);new=render(dict(baseline=base,users=users))
+        else:new=None
+    elif action=='clear':new=None
+    else:raise ValueError('Invalid change action.')
+    digest=hashlib.sha256((action+'\0'+domain+'\0'+account).encode()+b'\0'+(old or b'')+b'\0'+(new or b''))
+    for name,rank,p,raw,st in rows:
+        digest.update(str(p).encode()+raw+repr((st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_gid,st.st_mtime_ns)).encode())
+    token=digest.hexdigest()
+    if operation=='plan':
+        print('Managed rule: '+str(TARGET));print('Current:\n'+(old.decode() if old else '(none)'))
+        print('Proposed:\n'+(new.decode() if new else '(remove managed rule; existing policy resumes)'))
+        if source:print('Preserved local baseline from '+source)
+        print('SECURITY: listed users may authenticate as administrators for polkit auth_admin actions system-wide.')
+        print('No password bypass, sudo edits, AD changes, PAM edits, login-list changes, or service restart.')
+        print('Agent UI and PAM/SSSD authentication must be live-tested; this is not a daemon acceptance test.')
+        print('RESULT='+('UNCHANGED' if old==new else 'CHANGES'));print('PLAN_TOKEN='+token);return
+    if token!=expected:raise ValueError('Identity/rules changed since preview; nothing applied. Preview again.')
+    if old==new:print('Already matches; no changes.');return
+    # Only the deterministic, round-trip-verified template is ever written. There is no visudo-equivalent polkit validator.
+    if new is not None:
+        content=new.decode();payload=json.loads(content.splitlines()[1][13:])
+        if render(payload)!=new:raise ValueError('Generated-rule validation failed.')
+    if old is not None:backup(old)
+    temporary=None;committed=False
+    try:
+        if new is None:TARGET.unlink()
+        else:temporary=stage(new);os.replace(temporary,TARGET)
+        committed=True
+        if new is not None:
+            trusted(TARGET)
+            if TARGET.read_bytes()!=new or stat.S_IMODE(TARGET.stat().st_mode)!=0o644:raise ValueError('Post-write verification failed.')
+        elif TARGET.exists():raise ValueError('Managed rule still exists after removal.')
+        print('Managed rule file updated and verified. Polkit normally reloads rule changes automatically.')
+        print('Close existing prompts and reopen Synaptic. Check actual authentication before closing local admin access.')
+        print('Daemon JS acceptance, PAM success, and graphical identity presentation are NOT verified by this file check.')
+    except BaseException:
+        if committed:
+            if (new is None and TARGET.exists()) or (new is not None and (not TARGET.exists() or TARGET.read_bytes()!=new)):
+                print('ROLLBACK WARNING: concurrent modification; review backup.',file=sys.stderr)
+            elif old is None:TARGET.unlink(missing_ok=True)
+            else:restore=stage(old);os.replace(restore,TARGET)
+        raise
+    finally:
+        if temporary is not None:temporary.unlink(missing_ok=True)
+try:
+    trusted(Path('/etc'),True)
+    fd=os.open(str(LOCK),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as lock:
+        if os.fstat(lock.fileno()).st_uid!=0:raise ValueError('Unsafe lock owner.')
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);main()
+except Exception as e:print('Graphical administrator action stopped: '+str(e),file=sys.stderr);sys.exit(1)
+JSF_POLKIT_PY
+}
+
+graphical_admin_change() {
+    local action="$1" domain="$2" account="$3" preview token rc
+    local -a statuses
+    preview="$(graphical_admin_helper plan "$action" "$domain" "$account" 2>&1)"; rc=$?
+    printf '%s\n' "$preview" | tee "$work_dir/graphical-admins.txt"
+    [ "$rc" = 0 ] || return 1
+    if grep -qx 'RESULT=UNCHANGED' <<< "$preview"; then echo 'No change required.'; return 0; fi
+    token="$(sed -nE 's/^PLAN_TOKEN=([0-9a-f]{64})$/\1/p' <<< "$preview")"
+    [[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
+    echo 'Keep a working LOCAL administrator/root console open until Synaptic authentication is tested.'
+    echo 'This grants administrator-authentication authority; it is NOT merely a cosmetic dropdown change.'
+    confirm_local 'Apply exactly this graphical administrator identity change?' || return 1
+    if [ "$action" = add ]; then check_domain_context "$domain" || return 1; fi
+    graphical_admin_helper apply "$action" "$domain" "$account" "$token" 2>&1 | tee -a "$work_dir/graphical-admins.txt"
+    statuses=("${PIPESTATUS[@]}")
+    [ "${statuses[0]}" = 0 ] && [ "${statuses[1]}" = 0 ] || {
+        echo 'File operation or report capture failed. Review output/backups before any further action.'; return 1;
+    }
+}
+graphical_admin_menu() {
+    local action selected_domain account output rc version tool
+    local -a memberships=() managed_users=()
+    authorize_root || { pause_screen; return; }
+    for tool in python3 getent pkaction; do
+        command -v "$tool" >/dev/null 2>&1 || { echo "Missing native tool: $tool; no changes."; pause_screen; return; }
+    done
+    version="$(LC_ALL=C pkaction --version 2>&1)"; rc=$?
+    if [ "$rc" != 0 ] || [[ ! "$version" =~ (^|[[:space:]])126([[:space:].-]|$) ]]; then
+        printf 'This feature currently supports the polkit 126 JavaScript backend tested by this implementation.\nDetected: %s\nNo changes.\n' "$version"
+        pause_screen; return
+    fi
+    while :; do
+        cursor_menu 'Graphical administrator authentication:' action \
+            'View managed identities / baseline' 'Add a domain administrator identity' \
+            'Remove one managed identity' 'Remove all JS-Forge graphical grants' \
+            'How to test / important limits' 'Back' || return
+        case "$action" in
+            'View managed identities / baseline')
+                graphical_admin_helper show show unused unused 2>&1 | tee "$work_dir/graphical-admin-review.txt"
+                pause_screen ;;
+            'Add a domain administrator identity')
+                choose_joined_domain || { pause_screen; continue; }
+                echo 'Use an account that should have graphical administrator authority, e.g. user@domain.'
+                echo 'A short username is qualified with the selected domain. Empty cancels.'
+                read -r -p 'Domain administrator account: ' account || return
+                [ -n "$account" ] || continue
+                graphical_admin_change add "$selected_domain" "$account"; pause_screen ;;
+            'Remove one managed identity')
+                output="$(graphical_admin_helper list show unused unused 2>&1)"; rc=$?
+                if [ "$rc" != 0 ]; then printf '%s\n' "$output"; pause_screen; continue; fi
+                managed_users=()
+                while IFS= read -r account; do [ -z "$account" ] || managed_users+=("$account"); done <<< "$output"
+                if [ "${#managed_users[@]}" = 0 ]; then echo 'No managed domain identities.'; pause_screen; continue; fi
+                cursor_menu 'Remove ONLY this managed identity:' account 'Cancel' "${managed_users[@]}" || continue
+                [ "$account" != Cancel ] || continue
+                graphical_admin_change remove unused "$account"; pause_screen ;;
+            'Remove all JS-Forge graphical grants')
+                graphical_admin_change clear unused unused; pause_screen ;;
+            'How to test / important limits')
+                cat <<'JSF_POLKIT_NOTES'
+After an approved change, CLOSE any existing authentication prompt and reopen
+Synaptic from its normal menu launcher. Select the domain account if offered,
+and use that DOMAIN account's password. Test local administrator access too.
+The agent controls names, ordering and whether a chooser is displayed.
+This feature affects polkit auth_admin/auth_admin_keep administrator identities;
+it does not change sudo, desktop login/lock screens, auth_self requests, or PAM.
+The installed rule does NOT return YES and does NOT bypass passwords.
+Existing unrelated authorization rules and cached authorizations still apply.
+
+The existing conventional administrator baseline is copied into the managed
+rule. Custom/dynamic admin rules, ambiguous NSS identities, unsupported backends,
+or unsafe configuration paths are refused rather than guessed/overwritten.
+The baseline is a SNAPSHOT: review/reapply this configuration after changes to
+upstream admin rules. No automatic polkit restart or logout is performed.
+A file-write check is NOT proof that polkit accepted JavaScript or PAM auth worked.
+Check daemon logs if the prompt remains unchanged or authentication fails.
+
+Multiple domain accounts can be added one at a time. Removing the last managed
+account removes the JS-Forge rule and lets underlying administrator policy resume.
+A rule removal does not cancel existing cached authorizations or running apps.
+User identities are name-based; review grants if AD accounts are deleted/recreated.
+JSF_POLKIT_NOTES
+                pause_screen ;;
+            *) return ;;
+        esac
+    done
+}
+
+
+# Short input names with qualified NSS output, managed through one removable SSSD snippet.
+shortnames_helper() {
+    as_root env PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C python3 - "$@" <<'JSF_SHORTNAMES_PY'
+import os,sys,re,stat,json,configparser,hashlib,tempfile,subprocess,fcntl,datetime,uuid,time
+from pathlib import Path
+def sssd_ini_text(text):
+    # SSSD option indentation is not a ConfigParser value-continuation marker.
+    # Normalize only assignment/header prefixes; retain comments and wrapped values.
+    return re.sub(r'(?m)^[ \t]+(?=(?:[A-Za-z0-9_]+[ \t]*=|\[[^\]\r\n]+\][ \t]*(?:[#;][^\r\n]*)?\r?$))', '', text)
+
+os.umask(0o077)
+MAIN=Path('/etc/sssd/sssd.conf'); CONF=MAIN.parent/'conf.d'
+TARGET=CONF/'99-zz-jsforge-shortnames.conf'
+BACK=Path('/var/backups/JS-Forge/shortnames')
+LOCK=Path('/etc/.jsforge-shortnames.lock')
+MARK='# JS-Forge managed short domain names v1\n'
+operation,action,domain,account=sys.argv[1:5]
+expected=sys.argv[5] if len(sys.argv)>5 else ''
+if os.geteuid()!=0 or operation not in ('show','plan','apply','verify') or action not in ('show','enable','disable'):sys.exit('Invalid short-name request.')
+
+def trusted(p,directory=False):
+    for a in reversed(p.parents):
+        st=a.lstat()
+        if not stat.S_ISDIR(st.st_mode) or stat.S_ISLNK(st.st_mode) or st.st_uid!=0 or st.st_mode&0o022:raise ValueError('Unsafe ancestor: '+str(a))
+    st=p.lstat()
+    if p.is_symlink() or st.st_uid!=0 or st.st_mode&0o022:raise ValueError('Unsafe ownership/permissions/symlink: '+str(p))
+    if directory:
+        if not stat.S_ISDIR(st.st_mode):raise ValueError('Not a directory: '+str(p))
+    elif not stat.S_ISREG(st.st_mode) or st.st_nlink!=1 or st.st_size>1048576:raise ValueError('Unsafe configuration file: '+str(p))
+    return st
+
+def command(args,timeout=20,allowed=(0,)):
+    r=subprocess.run(args,capture_output=True,text=True,timeout=timeout)
+    if r.returncode not in allowed:raise ValueError('Command failed (exit '+str(r.returncode)+'): '+repr(args)+'\n'+r.stdout+r.stderr)
+    return r
+
+def render(data):
+    return (MARK+'# JSF_DATA: '+json.dumps(data,sort_keys=True,separators=(',',':'))+'\n'
+      +'# Accept short input; retain fully qualified NSS output. Remove this file to restore underlying policy.\n'
+      +'[sssd]\ndomain_resolution_order = '+data['domain']+'\n\n'
+      +'[domain/'+data['domain']+']\nuse_fully_qualified_names = false\n').encode()
+
+def managed():
+    if not TARGET.exists() and not TARGET.is_symlink():return None,None
+    st=trusted(TARGET)
+    if st.st_mode&0o077:raise ValueError('Managed SSSD snippet must be private (0600).')
+    raw=TARGET.read_bytes()
+    if not raw.startswith(MARK.encode()):raise ValueError('Existing target is not JS-Forge managed; refusing changes.')
+    lines=raw.decode().splitlines()
+    if len(lines)<2 or not lines[1].startswith('# JSF_DATA: '):raise ValueError('Invalid managed metadata.')
+    data=json.loads(lines[1][12:])
+    if set(data)!= {'domain','probe'} or not re.fullmatch(r'[A-Za-z0-9.-]+',data['domain']):raise ValueError('Invalid managed domain.')
+    p=data['probe']
+    if not isinstance(p,dict) or set(p)!={'name','uid','gid','home','shell','groups','primary_group'}:raise ValueError('Invalid stored identity probe.')
+    if not isinstance(p['name'],str) or not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,254}',p['name']) or p['name'].count('@')!=1 or p['name'].rsplit('@',1)[1].lower()!=data['domain'].lower():raise ValueError('Invalid stored probe name.')
+    if not isinstance(p['uid'],int) or p['uid']<1000 or not isinstance(p['gid'],int) or p['gid']<0 or not isinstance(p['groups'],list) or any(not isinstance(g,int) or g<0 for g in p['groups']):raise ValueError('Invalid stored IDs.')
+    if not isinstance(p['home'],str) or not p['home'].startswith('/') or '\n' in p['home'] or not isinstance(p['shell'],str) or not p['shell'].startswith('/') or not isinstance(p['primary_group'],str):raise ValueError('Invalid stored home/shell/group.')
+    if render(data)!=raw:raise ValueError('Managed snippet was manually changed; refusing overwrite.')
+    return raw,data
+
+def configs():
+    trusted(MAIN)
+    rows=[(MAIN,MAIN.read_bytes(),MAIN.stat())]
+    if CONF.exists() or CONF.is_symlink():
+        trusted(CONF,True)
+        for p in sorted(CONF.glob('*.conf')):
+            if p.name.startswith('.') or p==TARGET:continue
+            st=trusted(p);rows.append((p,p.read_bytes(),st))
+    return rows
+
+def parse(rows,extra=None):
+    merged=configparser.ConfigParser(interpolation=None,strict=True,empty_lines_in_values=False)
+    merged.optionxform=str.lower
+    for p,raw,st in rows:
+        text=raw.decode('utf-8')
+        if '\x00' in text or re.search(r'^\s*include(?:dir)?\s',text,re.M):raise ValueError('Unsupported include/NUL in '+str(p))
+        # Per-file parsing catches ambiguous duplicates while normal SSSD snippets may override prior files.
+        piece=configparser.ConfigParser(interpolation=None,strict=True,empty_lines_in_values=False)
+        piece.read_string(sssd_ini_text(text),source=str(p))
+        if piece.defaults():raise ValueError('ConfigParser-style DEFAULT sections require manual review: '+str(p))
+        for section in piece.sections():
+            if not merged.has_section(section):merged.add_section(section)
+            for key,value in piece.items(section):merged.set(section,key,value)
+    if extra is not None:
+        p=TARGET;newrows=rows+[(p,extra,None)]
+        ordered=[newrows[0]]+sorted(newrows[1:],key=lambda row:row[0].name)
+        return parse(ordered)
+    return merged
+
+def preflight(rows,target_domain):
+    if not re.fullmatch(r'[A-Za-z0-9.-]+',target_domain) or '.' not in target_domain:raise ValueError('Invalid selected domain.')
+    cfg=parse(rows)
+    if not cfg.has_section('sssd'):raise ValueError('Missing [sssd].')
+    configured=[v.strip().lower() for v in cfg.get('sssd','domains',fallback='').split(',') if v.strip()]
+    if configured!=[target_domain.lower()]:raise ValueError('This basic feature requires exactly one configured SSSD domain, matching the selected realm.')
+    section='domain/'+target_domain
+    if not cfg.has_section(section) or cfg.get(section,'id_provider',fallback='').strip().lower()!='ad':raise ValueError('Selected domain is not a directly configured AD provider.')
+    if cfg.has_option('sssd','default_domain_suffix'):raise ValueError('default_domain_suffix conflicts with short-name mode; manual review required, nothing removed.')
+    order=cfg.get('sssd','domain_resolution_order',fallback='').strip()
+    if order and order.lower()!=target_domain.lower():raise ValueError('Existing custom domain resolution order requires manual review.')
+    for sec in cfg.sections():
+        for key in ('full_name_format','re_expression'):
+            if cfg.has_option(sec,key):raise ValueError('Custom '+key+' requires manual review; preserving qualified identity behavior takes priority.')
+    status=command(['sssctl','domain-status',target_domain,'--online']).stdout
+    if not re.search(r'^\s*Online status:\s*Online\s*$',status,re.M|re.I):raise ValueError('SSSD domain is not confirmed online. Do not enable short names from an offline cache.')
+    return cfg
+
+def identity(name,normal=True):
+    rows=command(['getent','-s','sss','passwd',name]).stdout.strip().splitlines()
+    if len(rows)!=1:raise ValueError('SSSD identity is empty/ambiguous: '+name)
+    f=rows[0].split(':')
+    if len(f)!=7 or not f[2].isdigit() or not f[3].isdigit():raise ValueError('Invalid SSSD passwd entry.')
+    if normal:
+        ordinary=command(['getent','passwd',name]).stdout.strip().splitlines()
+        if len(ordinary)!=1 or ordinary[0].split(':')!=f:raise ValueError('Normal NSS resolution differs from SSSD for '+name)
+    uid,gid=int(f[2]),int(f[3])
+    groups=command(['id','-G','--',f[0]]).stdout.split()
+    if not groups or any(not g.isdigit() for g in groups):raise ValueError('Cannot inspect account group IDs.')
+    group=command(['getent','-s','sss','group',str(gid)]).stdout.strip().splitlines()
+    if len(group)!=1 or len(group[0].split(':'))!=4 or group[0].split(':')[2]!=str(gid):raise ValueError('Cannot resolve primary SSSD group.')
+    return dict(name=f[0],uid=uid,gid=gid,home=f[5],shell=f[6],groups=sorted(set(map(int,groups))),primary_group=group[0].split(':')[0])
+
+def probe(target_domain,entry):
+    if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]{0,254}',entry):raise ValueError('Enter a simple domain username or user@domain.')
+    name=entry if '@' in entry else entry+'@'+target_domain
+    if name.count('@')!=1 or name.rsplit('@',1)[1].lower()!=target_domain.lower():raise ValueError('Probe account must be in the selected domain.')
+    result=identity(name)
+    if result['uid']<1000 or result['name'].count('@')!=1 or result['name'].rsplit('@',1)[1].lower()!=target_domain.lower():raise ValueError('Probe must resolve to a qualified, non-system domain identity.')
+    if '@' not in result['primary_group']:raise ValueError('Primary group is not currently qualified; manual review required.')
+    if not result['home'].startswith('/') or result['home']=='/':raise ValueError('Unsafe probe home path.')
+    return result
+
+def collisions(target_domain):
+    # No AD enumeration is enabled. Check each current local name with an explicit qualified SSSD lookup.
+    rows=command(['getent','-s','files','passwd']).stdout.strip().splitlines()
+    if not rows or len(rows)>1000:raise ValueError('Unexpected local account list; manual collision review required.')
+    deadline=time.monotonic()+45;checked=0;found=[]
+    for row in rows:
+        f=row.split(':')
+        if len(f)!=7 or not f[2].isdigit() or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*\$?',f[0]):raise ValueError('Unusual local username record requires manual review.')
+        remaining=deadline-time.monotonic()
+        if remaining<=0:raise ValueError('Collision scan timed out; nothing applied.')
+        r=command(['getent','-s','sss','passwd',f[0]+'@'+target_domain],timeout=min(8,remaining),allowed=(0,2))
+        if r.returncode==0:
+            if not r.stdout.strip():raise ValueError('Inconsistent SSSD lookup during collision scan.')
+            found.append(f[0])
+        checked+=1
+    if found:raise ValueError('Local/domain name collisions: '+', '.join(found)+'. Use qualified domain login or resolve collisions first.')
+    return checked
+
+def validate():
+    result=command(['sssctl','config-check'])
+    return result.stdout+result.stderr
+
+def stage(raw):
+    fd,name=tempfile.mkstemp(prefix='.jsforge-shortnames-',suffix='.tmp',dir=str(CONF))
+    try:
+        with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+        os.chown(name,0,0);os.chmod(name,0o600)
+        return Path(name)
+    except BaseException:Path(name).unlink(missing_ok=True);raise
+
+def backup(raw):
+    for p in (Path('/var'),Path('/var/backups')):trusted(p,True)
+    for p in (BACK.parent,BACK):
+        if not p.exists():p.mkdir(mode=0o700)
+        trusted(p,True)
+        if p.stat().st_mode&0o077:raise ValueError('Backup directory is not private: '+str(p))
+    p=BACK/(datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex+'.conf-backup')
+    with p.open('xb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+    os.chmod(p,0o600);print('Private backup: '+str(p))
+
+def verification(data):
+    expected=data['probe'];full=expected['name'];short=full.rsplit('@',1)[0]
+    qualified=identity(full);unqualified=identity(short)
+    for label,actual in (('qualified',qualified),('short',unqualified)):
+        if actual!=expected:
+            changes=[key for key in expected if actual.get(key)!=expected[key]]
+            raise ValueError(label+' lookup differs from the stored baseline in '+', '.join(changes)+'. Keep local admin access; disable/restore before a new login.')
+    print('PASS: short and qualified lookups return the original qualified name, UID/GID, home, shell, primary group name and group IDs.')
+    print('This is NSS identity verification, not a password/PAM/desktop-session test. Test actual login separately.')
+
+def main():
+    trusted(MAIN.parent,True)
+    old,data=managed();rows=configs()
+    if operation=='show':
+        print('Managed snippet: '+str(TARGET));print(old.decode() if old else 'Short-name override is not installed.')
+        cfg=parse(rows,old) if old else parse(rows)
+        for sec,key in [('sssd','domains'),('sssd','domain_resolution_order')]:print(sec+'.'+key+' = '+cfg.get(sec,key,fallback='(unset)'))
+        for sec in cfg.sections():
+            if sec.startswith('domain/'):print(sec+'.use_fully_qualified_names = '+cfg.get(sec,'use_fully_qualified_names',fallback='(provider default)'))
+        print('Displayed configuration may be pending a separately approved SSSD restart.');return
+    if operation=='verify':
+        if not data:raise ValueError('No managed short-name baseline is installed.')
+        verification(data);return
+    validation=validate();new=None;count=0
+    if action=='enable':
+        preflight(rows,domain)
+        if data and data['domain'].lower()!=domain.lower():raise ValueError('Another managed domain is present; disable it before switching.')
+        p=probe(domain,account);count=collisions(domain)
+        if data and p!=data['probe']:raise ValueError('Managed probe identity differs from the original baseline. Verify/review the existing mode or disable it before replacing the probe.')
+        new=render(dict(domain=domain.lower(),probe=p))
+        cfg=parse(rows,new)
+        section='domain/'+domain.lower()
+        if cfg.get('sssd','domain_resolution_order',fallback='').strip().lower()!=domain.lower() or cfg.get(section,'use_fully_qualified_names',fallback='').strip().lower()!='false':raise ValueError('A later snippet overrides the requested settings; manual review required.')
+    elif action!='disable':raise ValueError('Invalid change action.')
+    digest=hashlib.sha256((action+'\0'+domain+'\0'+account).encode()+b'\0'+(old or b'')+b'\0'+(new or b''))
+    digest.update(str(CONF.exists()).encode())
+    for path,raw,st in rows:digest.update(str(path).encode()+raw+repr((st.st_dev,st.st_ino,st.st_mode,st.st_uid,st.st_gid,st.st_mtime_ns)).encode())
+    token=digest.hexdigest()
+    if operation=='plan':
+        print('Current managed override:\n'+(old.decode() if old else '(none)'))
+        print('Proposed override:\n'+(new.decode() if new else '(remove managed snippet; underlying settings resume)'))
+        if new:print('Local names checked for current domain collisions: '+str(count)+' (not a guarantee against future AD/local account changes).')
+        if new and not CONF.exists():print('Create root-owned /etc/sssd/conf.d, mode 0700.')
+        print('No main-config edits, home moves, UID/GID changes, sudo/polkit changes, PAM edits or cache purge.')
+        print('A separately confirmed native SSSD restart is needed. Keep a local administrator console open.')
+        print('RESULT='+('UNCHANGED' if old==new else 'CHANGES'));print('PLAN_TOKEN='+token);return
+    if token!=expected:raise ValueError('Identity/configuration changed after preview; nothing applied.')
+    if old==new:print('No file changes required. A pending restart may still be needed.');return
+    created=False;temporary=None;committed=False
+    try:
+        if not CONF.exists():CONF.mkdir(mode=0o700);os.chown(CONF,0,0);os.chmod(CONF,0o700);created=True
+        trusted(CONF,True)
+        if old is not None:backup(old)
+        if new is None:TARGET.unlink()
+        else:temporary=stage(new);os.replace(temporary,TARGET)
+        committed=True
+        print(validate())
+        if new is not None and (TARGET.read_bytes()!=new or stat.S_IMODE(TARGET.stat().st_mode)!=0o600):raise ValueError('Post-write verification failed.')
+        print('SSSD configuration validated. Restart is a separate confirmed action; no restart has occurred here.')
+    except BaseException:
+        if committed:
+            if (new is None and TARGET.exists()) or (new is not None and (not TARGET.exists() or TARGET.read_bytes()!=new)):
+                print('ROLLBACK WARNING: concurrent modification; review private backup.',file=sys.stderr)
+            elif old is None:TARGET.unlink(missing_ok=True);print('Managed override removed after validation failure.',file=sys.stderr)
+            else:restore=stage(old);os.replace(restore,TARGET);print('Previous managed override restored.',file=sys.stderr)
+        raise
+    finally:
+        if temporary is not None:temporary.unlink(missing_ok=True)
+        if created:
+            try:CONF.rmdir()
+            except OSError:pass
+try:
+    trusted(Path('/etc'),True)
+    fd=os.open(str(LOCK),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+    with os.fdopen(fd,'w') as lock:
+        if os.fstat(lock.fileno()).st_uid!=0:raise ValueError('Unsafe lock owner.')
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);main()
+except Exception as e:print('Short-name action stopped: '+str(e),file=sys.stderr);sys.exit(1)
+JSF_SHORTNAMES_PY
+}
+
+shortnames_verify() {
+    local -a status
+    shortnames_helper verify show unused unused 2>&1 | tee "$work_dir/shortnames-verify.txt"
+    status=("${PIPESTATUS[@]}")
+    if [ "${status[0]}" != 0 ] || [ "${status[1]}" != 0 ]; then
+        echo 'Verification/capture failed. KEEP the local administrator session open.'
+        echo 'Do not proceed with a fresh domain login until reviewed.'
+        echo 'Use Disable short-name login to remove this override, then separately approve the SSSD restart.'
+        echo 'No homes were moved; do not delete or recreate a home to work around a failed check.'
+        return 1
+    fi
+}
+shortnames_change() {
+    local action="$1" domain="$2" account="$3" preview token rc
+    local -a status
+    preview="$(shortnames_helper plan "$action" "$domain" "$account" 2>&1)"; rc=$?
+    printf '%s\n' "$preview" | tee "$work_dir/shortnames.txt"
+    [ "$rc" = 0 ] || return 1
+    token="$(sed -nE 's/^PLAN_TOKEN=([0-9a-f]{64})$/\1/p' <<< "$preview")"
+    [[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
+    if ! grep -qx 'RESULT=UNCHANGED' <<< "$preview"; then
+        confirm_local 'Apply exactly the displayed short-name configuration change?' || return 1
+        if [ "$action" = enable ]; then check_domain_context "$domain" || return 1; fi
+        shortnames_helper apply "$action" "$domain" "$account" "$token" 2>&1 | tee -a "$work_dir/shortnames.txt"
+        status=("${PIPESTATUS[@]}")
+        [ "${status[0]}" = 0 ] && [ "${status[1]}" = 0 ] || {
+            echo 'Configuration/capture failed. No following restart was attempted.'; return 1;
+        }
+    elif [ "$action" = disable ]; then
+        echo 'No managed short-name override is installed; no restart requested.'; return 0
+    else
+        echo 'Already configured; a previously cancelled restart may still be pending.'
+    fi
+    if validate_restart_sssd; then
+        if [ "$action" = enable ]; then
+            shortnames_verify || return 1
+            echo 'Now test a new domain login using the short username, keeping the LOCAL admin session available.'
+        else
+            echo 'Managed override removed and SSSD restarted. Underlying naming policy now applies.'
+            echo 'Use the fully qualified domain name for the next test; other site settings were not changed.'
+        fi
+    else
+        echo 'Restart not completed/confirmed. The approved file change may remain pending.'
+        echo 'Use View current configuration, or Validate / restart SSSD when ready.'
+        return 1
+    fi
+}
+shortnames_menu() {
+    local action selected_domain account tool
+    local -a memberships=()
+    authorize_root || { pause_screen; return; }
+    for tool in python3 sssctl getent id; do
+        command -v "$tool" >/dev/null 2>&1 || { echo "Missing native tool: $tool; no changes."; pause_screen; return; }
+    done
+    while :; do
+        cursor_menu 'Short domain usernames:' action \
+            'View current configuration' 'Enable short-name login' 'Disable short-name login' \
+            'Verify short / qualified identity lookups' 'Validate / restart SSSD' \
+            'Important notes' 'Back' || return
+        case "$action" in
+            'View current configuration')
+                shortnames_helper show show unused unused 2>&1 | tee "$work_dir/shortnames-review.txt"; pause_screen ;;
+            'Enable short-name login')
+                choose_joined_domain || { pause_screen; continue; }
+                selected_domain="${selected_domain,,}"
+                echo 'Use a real domain user as the identity/home preservation probe.'
+                read -r -p 'Domain user to test (short or user@domain; empty cancels): ' account || return
+                [ -n "$account" ] || continue
+                shortnames_change enable "$selected_domain" "$account"; pause_screen ;;
+            'Disable short-name login')
+                shortnames_change disable unused unused; pause_screen ;;
+            'Verify short / qualified identity lookups') shortnames_verify; pause_screen ;;
+            'Validate / restart SSSD')
+                validate_restart_sssd
+                echo 'If short-name mode is installed, use Verify short / qualified identity lookups next.'
+                pause_screen ;;
+            'Important notes')
+                cat <<'JSF_SHORTNAME_NOTES'
+Allows short domain input while domain_resolution_order keeps qualified NSS
+output. Local accounts retain their usual usernames; no @hostname alias is made.
+This basic option supports one directly configured AD domain. It checks every
+current local username against that domain without enabling AD enumeration.
+A current collision, unconfirmed online state, custom name parsing/output format,
+conflicting default_domain_suffix/resolution order, or ambiguous identity stops it.
+Collision checking is a point-in-time check, NOT a future guarantee.
+
+A root-owned 0600 snippet is the only authentication configuration changed:
+/etc/sssd/conf.d/99-zz-jsforge-shortnames.conf
+Removing it restores the underlying naming settings; sssd.conf is not edited.
+No UID/GID, home, sudo, polkit, PAM, GPO exception, or ticket/cache changes.
+Existing snippets still apply; conflicting later settings are refused.
+
+Before enabling, identity/group IDs, qualified user/group names, home and shell
+are recorded for your probe account. After a separately approved SSSD restart,
+both short and qualified lookups must match that baseline. A failed check leaves
+you in control: keep local access, disable the override, and approve a restart.
+No home migration/deletion and no automatic second restart are attempted.
+One probe is NOT a test of every domain account, password, PAM service, or desktop.
+Keep a differently named local administrator available and test an actual login.
+Approved file changes remain pending if restart is cancelled or fails.
+Private snippet backups are outside SSSD's conf.d. Reports identify the probe
+user, UID/GID, groups and home path; review exports before sharing.
+JSF_SHORTNAME_NOTES
+                pause_screen ;;
+            *) return ;;
+        esac
+    done
+}
+
+
+xrdp_domain_helper() {
+as_root env PATH=/usr/sbin:/usr/bin:/sbin:/bin LC_ALL=C python3 - "$@" <<'JSF_XRDP_DOMAIN_PY'
+import os,sys,re,stat,json,configparser,hashlib,tempfile,subprocess,fcntl,datetime,uuid
+from pathlib import Path
+def sssd_ini_text(text):
+    # SSSD option indentation is not a ConfigParser value-continuation marker.
+    # Normalize only assignment/header prefixes; retain comments and wrapped values.
+    return re.sub(r'(?m)^[ \t]+(?=(?:[A-Za-z0-9_]+[ \t]*=|\[[^\]\r\n]+\][ \t]*(?:[#;][^\r\n]*)?\r?$))', '', text)
+
+os.umask(0o077)
+MAIN=Path('/etc/sssd/sssd.conf');CONF=MAIN.parent/'conf.d'
+TARGET=CONF/'99-zzzz-jsforge-xrdp.conf'
+BACK=Path('/var/backups/JS-Forge/xrdp-domain-login')
+LOCK=Path('/etc/.jsforge-xrdp-domain-login.lock')
+MARK='# JS-Forge managed XRDP domain login v1\n'
+KEY='ad_gpo_map_remote_interactive';SERVICE='xrdp-sesman'
+operation,action,domain=sys.argv[1:4]
+expected=sys.argv[4] if len(sys.argv)>4 else ''
+if os.geteuid()!=0 or operation not in ('show','plan','apply') or action not in ('show','enable','disable'):sys.exit('Invalid XRDP domain-login request.')
+def trusted(p,directory=False):
+ for a in reversed(p.parents):
+  s=a.lstat()
+  if not stat.S_ISDIR(s.st_mode) or stat.S_ISLNK(s.st_mode) or s.st_uid!=0 or s.st_mode&0o022:raise ValueError('Unsafe ancestor: '+str(a))
+ s=p.lstat()
+ if p.is_symlink() or s.st_uid!=0 or s.st_mode&0o022:raise ValueError('Unsafe ownership/permissions/symlink: '+str(p))
+ if directory:
+  if not stat.S_ISDIR(s.st_mode):raise ValueError('Not a directory: '+str(p))
+ elif not stat.S_ISREG(s.st_mode) or s.st_nlink!=1 or s.st_size>1048576:raise ValueError('Unsafe configuration file: '+str(p))
+ return s
+def render(data):
+ return (MARK+'# JSF_DATA: '+json.dumps(data,sort_keys=True,separators=(',',':'))+'\n'
+  '# Map XRDP to AD remote-interactive logon rights; do not bypass access policy.\n'
+  '[domain/'+data['domain']+']\n'+KEY+' = '+data['value']+'\n').encode()
+def tokens(value):
+ if not value.strip():return []
+ items=[v.strip() for v in value.split(',')]
+ if any(not re.fullmatch(r'[+-]?[A-Za-z0-9_.-]+',v) for v in items):raise ValueError('Complex/invalid PAM-service mapping requires manual review.')
+ return items
+def managed():
+ if not TARGET.exists() and not TARGET.is_symlink():return None,None
+ s=trusted(TARGET)
+ if stat.S_IMODE(s.st_mode)!=0o600:raise ValueError('Managed snippet must be root-owned mode 0600.')
+ raw=TARGET.read_bytes();lines=raw.decode().splitlines()
+ if not raw.startswith(MARK.encode()) or len(lines)<2 or not lines[1].startswith('# JSF_DATA: '):raise ValueError('Target is not an intact JS-Forge managed snippet.')
+ data=json.loads(lines[1][12:])
+ if not isinstance(data,dict) or set(data)!={'domain','value'} or not isinstance(data['domain'],str) or not re.fullmatch(r'[A-Za-z0-9.-]+',data['domain']) or not isinstance(data['value'],str):raise ValueError('Invalid managed metadata.')
+ entries=tokens(data['value'])
+ if '+xrdp-sesman' not in entries or '-xrdp-sesman' in entries or render(data)!=raw:raise ValueError('Managed snippet was manually changed; review before replacement/removal.')
+ return raw,data
+def configs(old):
+ s=trusted(MAIN);rows=[(MAIN,MAIN.read_bytes(),s)]
+ if CONF.exists() or CONF.is_symlink():
+  trusted(CONF,True)
+  for p in sorted(CONF.glob('*.conf')):
+   if p.name.startswith('.') or p==TARGET:continue
+   s=trusted(p);rows.append((p,p.read_bytes(),s))
+ return rows
+def parse(rows,extra=None):
+ items=list(rows)
+ if extra is not None:items.append((TARGET,extra,None));items=[items[0]]+sorted(items[1:],key=lambda r:r[0].name)
+ merged=configparser.ConfigParser(interpolation=None,strict=True,empty_lines_in_values=False)
+ for p,raw,s in items:
+  text=raw.decode('utf-8')
+  if '\0' in text or re.search(r'^\s*include(?:dir)?\s',text,re.M):raise ValueError('Unsupported include/NUL in '+str(p))
+  piece=configparser.ConfigParser(interpolation=None,strict=True,empty_lines_in_values=False);piece.read_string(sssd_ini_text(text),source=str(p))
+  if piece.defaults():raise ValueError('DEFAULT section requires manual review: '+str(p))
+  for section in piece.sections():
+   if not merged.has_section(section):merged.add_section(section)
+   for key,value in piece.items(section):merged.set(section,key,value)
+ return merged
+def validate():
+ r=subprocess.run(['sssctl','config-check'],capture_output=True,text=True,timeout=30)
+ if r.returncode:raise ValueError('SSSD validation failed:\n'+r.stdout+r.stderr)
+ return r.stdout+r.stderr
+def section_for(cfg,name):
+ matches=[s for s in cfg.sections() if s.casefold()==('domain/'+name).casefold()]
+ if len(matches)!=1:raise ValueError('Selected domain must have exactly one existing section; no domain is invented.')
+ return matches[0]
+def make_plan():
+ old,data=managed();rows=configs(old);base=parse(rows);new=None;details=[]
+ if action=='enable':
+  if not re.fullmatch(r'[A-Za-z0-9.-]+',domain) or '.' not in domain:raise ValueError('Invalid domain.')
+  if data and data['domain'].casefold()!=domain.casefold():raise ValueError('Another managed domain is present. Remove/review its override before switching.')
+  validate();section=section_for(base,domain)
+  identity_provider=base.get(section,'id_provider',fallback='').strip().lower()
+  access_provider=base.get(section,'access_provider',fallback='').strip().lower()
+  if identity_provider!='ad' or access_provider!='ad':
+   raise ValueError('Selected section ['+section+'] parsed id_provider='+repr(identity_provider)+', access_provider='+repr(access_provider)+'. AD GPO mapping requires the AD providers; no providers were changed. Inspected files: '+', '.join(str(p) for p,raw,st in rows))
+  for key,value in base.items(section):
+   if key.startswith('ad_gpo_map_') and key!=KEY and any(v.lstrip('+')==SERVICE for v in tokens(value) if not v.startswith('-')):raise ValueError('XRDP is explicitly assigned to another logon-right mapping ('+key+'); manual review required.')
+  current=base.get(section,KEY,fallback='');entries=tokens(current)
+  if not any(v in (SERVICE,'+'+SERVICE) for v in entries) or '-'+SERVICE in entries:
+   updated=[v for v in entries if v not in (SERVICE,'+'+SERVICE,'-'+SERVICE)]+['+'+SERVICE]
+   new=render(dict(domain=section[7:],value=', '.join(updated)))
+  effective=parse(rows,new);wanted=tokens(effective.get(section,KEY,fallback=''))
+  if not any(v in (SERVICE,'+'+SERVICE) for v in wanted) or '-'+SERVICE in wanted:raise ValueError('A later snippet overrides this mapping; no change applied.')
+  details=['Selected domain: '+section[7:], 'Parsed providers: id_provider='+identity_provider+', access_provider='+access_provider, 'Underlying '+KEY+' = '+(current or '(defaults)'),
+   'Proposed effective '+KEY+' = '+effective.get(section,KEY,fallback='(defaults)'),
+   'GPO control setting retained: '+base.get(section,'ad_gpo_access_control',fallback='(provider default)'),
+   'Existing service mappings are retained; an explicit -xrdp-sesman is replaced only in this managed override.']
+ elif action=='disable':
+  details=['Remove ONLY the JS-Forge managed XRDP snippet.',
+   'Existing main-file/manual mappings remain. Removal does not guarantee that XRDP domain login is revoked.']
+ else:raise ValueError('Invalid change action.')
+ digest=hashlib.sha256((action+'\0'+domain).encode()+b'\0'+(old or b'')+b'\0'+(new or b''))
+ digest.update(str(CONF.exists()).encode())
+ for p,raw,s in rows:digest.update(str(p).encode()+raw+repr((s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_mtime_ns)).encode())
+ if old is not None:
+  s=TARGET.lstat();digest.update(repr((s.st_dev,s.st_ino,s.st_mode,s.st_uid,s.st_gid,s.st_mtime_ns)).encode())
+ return old,new,details,digest.hexdigest()
+def stage(raw):
+ fd,name=tempfile.mkstemp(prefix='.jsforge-xrdp-domain-',suffix='.tmp',dir=str(CONF))
+ try:
+  with os.fdopen(fd,'wb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+  os.chown(name,0,0);os.chmod(name,0o600);return Path(name)
+ except BaseException:Path(name).unlink(missing_ok=True);raise
+def backup(raw):
+ for p in (Path('/var'),Path('/var/backups')):trusted(p,True)
+ for p in (BACK.parent,BACK):
+  if not p.exists():p.mkdir(mode=0o700)
+  trusted(p,True)
+  if p.stat().st_mode&0o077:raise ValueError('Backup directory is not private: '+str(p))
+ p=BACK/(datetime.datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex+'.conf-backup')
+ with p.open('xb') as f:f.write(raw);f.flush();os.fsync(f.fileno())
+ os.chmod(p,0o600);print('Private backup: '+str(p))
+def main():
+ trusted(MAIN.parent,True)
+ if operation=='show':
+  old,data=managed();rows=configs(old);cfg=parse(rows,old)
+  print('Managed snippet: '+str(TARGET));print(old.decode() if old else 'No JS-Forge XRDP mapping override.')
+  for section in cfg.sections():
+   if section.startswith('domain/'):
+    print('['+section+'] '+KEY+' = '+cfg.get(section,KEY,fallback='(defaults)'))
+  print('A manually configured mapping remains effective without a managed snippet. A restart may be pending.');return
+ old,new,details,token=make_plan()
+ if operation=='plan':
+  print('Managed file: '+str(TARGET))
+  for line in details:print(line)
+  print('Current managed override:\n'+(old.decode() if old else '(none)'))
+  print('Proposed managed override:\n'+(new.decode() if new else '(none; underlying configuration applies)'))
+  print('AD allow/deny logon policy still applies. No password bypass or automatic GPO exception.')
+  print('No naming, home, PAM, sudo, polkit, service-init or XRDP-package changes.')
+  print('SSSD restart is separately confirmed; keep local administrator access.')
+  print('RESULT='+('UNCHANGED' if old==new else 'CHANGES'));print('PLAN_TOKEN='+token);return
+ if token!=expected:raise ValueError('Configuration changed since preview; nothing applied.')
+ if old==new:print('Already matches. No files rewritten. A restart may still be pending.');return
+ temporary=None;created=False;committed=False
+ try:
+  if not CONF.exists():CONF.mkdir(mode=0o700);os.chown(CONF,0,0);os.chmod(CONF,0o700);created=True
+  trusted(CONF,True)
+  if old is not None:backup(old)
+  if new is None:TARGET.unlink()
+  else:temporary=stage(new);os.replace(temporary,TARGET)
+  committed=True;print(validate())
+  if new is not None:
+   trusted(TARGET)
+   if TARGET.read_bytes()!=new or stat.S_IMODE(TARGET.stat().st_mode)!=0o600:raise ValueError('Post-write verification failed.')
+  elif TARGET.exists():raise ValueError('Managed file still exists after removal.')
+  print('SSSD mapping configuration validated. No service has been restarted by this file operation.')
+ except BaseException:
+  if committed:
+   if (new is None and TARGET.exists()) or (new is not None and (not TARGET.exists() or TARGET.read_bytes()!=new)):print('ROLLBACK WARNING: concurrent modification; review private backup.',file=sys.stderr)
+   elif old is None:TARGET.unlink(missing_ok=True);print('New XRDP override removed after failure.',file=sys.stderr)
+   else:restore=stage(old);os.replace(restore,TARGET);print('Previous XRDP override restored.',file=sys.stderr)
+  raise
+ finally:
+  if temporary is not None:temporary.unlink(missing_ok=True)
+  if created:
+   try:CONF.rmdir()
+   except OSError:pass
+try:
+ trusted(Path('/etc'),True)
+ fd=os.open(str(LOCK),os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+ with os.fdopen(fd,'w') as lock:
+  s=os.fstat(lock.fileno())
+  if s.st_uid!=0 or not stat.S_ISREG(s.st_mode) or s.st_nlink!=1 or s.st_mode&0o077:raise ValueError('Unsafe lock file.')
+  fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB);main()
+except Exception as e:print('XRDP domain-login action stopped: '+str(e),file=sys.stderr);sys.exit(1)
+JSF_XRDP_DOMAIN_PY
+}
+
+xrdp_domain_check() {
+local account
+local -a statuses
+authorize_root || return 1
+[ -f /etc/pam.d/xrdp-sesman ] || { echo 'XRDP PAM service file not found. Install XRDP separately first.'; return 1; }
+read -r -p 'Domain account to test (use user@domain unless short lookup works; empty cancels): ' account || return 1
+valid_text "$account" && [[ "$account" != -* ]] || return 1
+if ! getent passwd "$account" > "$work_dir/xrdp-identity.txt"; then
+    echo 'Account lookup failed. With fully qualified names enabled, enter user@your.domain.'
+    echo 'No PAM account check attempted for an unresolved user.'; return 1
+fi
+echo 'Testing XRDP account AUTHORIZATION only, not the password or desktop startup.'
+as_root env LC_ALL=C sssctl user-checks -a acct -s xrdp-sesman "$account" 2>&1 | tee "$work_dir/xrdp-login-check.txt"
+statuses=("${PIPESTATUS[@]}")
+echo 'Read the actual pam_acct_mgmt result. Native tool exit status alone may not prove authorization.'
+echo 'Then test a real RDP login. Domain GPO allow/deny rules still apply.'
+[ "${statuses[0]}" = 0 ] && [ "${statuses[1]}" = 0 ]
+}
+
+xrdp_domain_change() {
+local action="$1" domain="$2" preview token rc
+local -a statuses
+preview="$(xrdp_domain_helper plan "$action" "$domain" 2>&1)"; rc=$?
+printf '%s\n' "$preview" | tee "$work_dir/xrdp-domain-login.txt"
+[ "$rc" = 0 ] || return 1
+token="$(sed -nE 's/^PLAN_TOKEN=([0-9a-f]{64})$/\1/p' <<< "$preview")"
+[[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
+if ! grep -qx 'RESULT=UNCHANGED' <<< "$preview"; then
+    echo 'Keep a working LOCAL administrator/console session open.'
+    confirm_local 'Apply exactly the displayed XRDP domain-login mapping change?' || return 1
+    if [ "$action" = enable ]; then check_domain_context "$domain" || return 1; fi
+    xrdp_domain_helper apply "$action" "$domain" "$token" 2>&1 | tee -a "$work_dir/xrdp-domain-login.txt"
+    statuses=("${PIPESTATUS[@]}")
+    [ "${statuses[0]}" = 0 ] && [ "${statuses[1]}" = 0 ] || {
+        echo 'Configuration/capture failed; no following restart was attempted.'; return 1;
+    }
+elif [ "$action" = disable ]; then
+    echo 'No managed XRDP override is installed. Manual mappings were not removed. No restart requested.'; return 0
+else
+    echo 'Mapping already present. No file changes; a previously cancelled/manual restart may still be pending.'
+fi
+if validate_restart_sssd; then
+    echo 'SSSD restarted. Use Check XRDP account authorization, then test a real RDP login.'
+else
+    echo 'Restart not completed/confirmed. Any approved mapping change remains on disk and may be pending.'
+    echo 'Use View mapping or Validate / restart SSSD when ready.'; return 1
+fi
+}
+
+xrdp_domain_menu() {
+local action selected_domain tool
+local -a memberships=()
+authorize_root || { pause_screen; return; }
+for tool in python3 sssctl realm getent; do
+    command -v "$tool" >/dev/null 2>&1 || { echo "Missing native tool: $tool. Install/check integration packages first."; pause_screen; return; }
+done
+while :; do
+    cursor_menu 'XRDP domain login (SSSD):' action \
+        'View mapping / managed override' 'Enable XRDP domain login mapping' \
+        'Remove managed XRDP mapping override' 'Check XRDP account authorization' \
+        'Validate / restart SSSD' 'Important notes' 'Back' || return
+    case "$action" in
+        'View mapping / managed override')
+            xrdp_domain_helper show show unused 2>&1 | tee "$work_dir/xrdp-domain-review.txt"; pause_screen ;;
+        'Enable XRDP domain login mapping')
+            choose_joined_domain || { pause_screen; continue; }
+            xrdp_domain_change enable "$selected_domain"; pause_screen ;;
+        'Remove managed XRDP mapping override')
+            xrdp_domain_change disable unused; pause_screen ;;
+        'Check XRDP account authorization') xrdp_domain_check; pause_screen ;;
+        'Validate / restart SSSD') validate_restart_sssd; pause_screen ;;
+        'Important notes')
+            cat <<'JSF_XRDP_DOMAIN_NOTES'
+Maps xrdp-sesman to Active Directory remote-interactive logon rights using:
+    ad_gpo_map_remote_interactive = +xrdp-sesman
+Existing custom service mappings are preserved in the override. An explicit
+-xrdp-sesman is replaced only in this opt-in override. An explicit assignment
+to another logon-right mapping requires manual review instead of guessing.
+
+This is NOT the unreadable-GPO exception and does NOT bypass AD access policy.
+AD allow/deny Remote Desktop Services logon rights still apply. No permissive
+mode, access_provider changes, PAM edits, sudo/polkit grants or password bypass.
+Existing ad_gpo_ignore_unreadable and ad_gpo_access_control settings are retained.
+
+Select an existing AD-backed SSSD realm; no domain section is fabricated.
+Only /etc/sssd/conf.d/99-zzzz-jsforge-xrdp.conf is managed, root-owned mode 0600.
+The main configuration and unrelated snippets are not edited. A pre-existing
+manual mapping needs no new override. Later conflicting snippet settings,
+unsafe files and manually modified managed content are refused for review.
+Changes are previewed, backed up where replacing/removing an existing managed
+file, syntax/configuration validated, and locally rolled back on failure.
+SSSD restart is a separate approval; cancelling leaves an approved file change
+pending. Removing this override restores underlying settings, not necessarily
+disabling domain XRDP access if a manual mapping remains.
+
+Use user@domain if use_fully_qualified_names=True and short lookup fails.
+This feature does not change naming policy, home paths or .xsession files.
+Check XRDP account authorization tests PAM account policy, NOT the password,
+Xorg or desktop. Complete a real RDP login after the account check succeeds.
+XRDP installation, socket/startup repairs and firewall remain separate tasks.
+JSF_XRDP_DOMAIN_NOTES
+            pause_screen ;;
+        *) return ;;
+    esac
+done
+}
+
+access_menu() {
+    local action
+    while :; do
+        cursor_menu 'Domain access:' action 'Domain sudo access' 'Graphical administrator authentication' 'Short domain usernames' 'XRDP domain login (SSSD)' 'Review unreadable-GPO exception' 'Back' || return
+        case "$action" in
+            'Domain sudo access') domain_sudo_menu ;;
+            'Graphical administrator authentication') graphical_admin_menu ;;
+            'Short domain usernames') shortnames_menu ;;
+'XRDP domain login (SSSD)') xrdp_domain_menu ;;
+            'Review unreadable-GPO exception') gpo_exception_menu ;;
+            *) return ;;
+        esac
+    done
+}
+maintenance_menu() {
+    local action
+    while :; do
+        cursor_menu 'Maintenance and troubleshooting:' action 'Check / repair SSSD startup and logging' 'Validate SSSD configuration' 'Targeted user cleanup / offboarding helpers' 'Back' || return
+        case "$action" in
+            'Check / repair SSSD startup and logging') sssd_compat_menu ;;
+            'Validate SSSD configuration') run_read "$work_dir/sssd-validation.txt" sssctl config-check; pause_screen ;;
+            'Targeted user cleanup / offboarding helpers') cleanup_menu ;;
+            *) return ;;
+        esac
+    done
+}
+
+# Command-scoped membership actions: opening this menu needs neither net nor samba-tool.
+group_require_tool() {
+    local tool="$1" package="$2"
+    command -v "$tool" >/dev/null 2>&1 && return 0
+    printf 'Missing command: %s\nNative APT package for this command: %s\n' "$tool" "$package"
+    echo 'Only this action needs it; other group menu actions remain available.'
+    confirm_local 'Install this action-specific package?' || return 1
+    run_interactive apt-get install "$package" || return 1
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "APT returned success but $tool is still not on PATH. Check the package/files; this action was not run."; return 1;
+    }
+}
+group_valid_text() {
+    valid_text "$1" && [[ "$1" != -* && "$1" != *,* && "$1" != *%* && "$1" != *:* ]]
+}
+group_rpc_configure() {
+    local dc admin
+    read -r -p "Domain controller FQDN [${group_dc:-empty cancels}]: " dc || return 1
+    dc="${dc:-$group_dc}"
+    valid_domain "$dc" || { echo 'Use the DC DNS hostname, not a URL or IP address.'; return 1; }
+    read -r -p "Delegated admin (UPN or DOMAIN\\user) [${group_admin:-empty cancels}]: " admin || return 1
+    admin="${admin:-$group_admin}"
+    valid_text "$admin" && [[ "$admin" != -* && "$admin" != *%* && ! "$admin" =~ [[:space:]] ]] || {
+        echo 'Enter an account name only. Never append %password.'; return 1;
+    }
+    printf '\nDC: %s\nAdministrator: %s\n' "$dc" "$admin"
+    echo 'Native net RPC commands; Samba prompts for a password. No password is stored by this wrapper.'
+    confirm_local 'Use this domain-group connection?' || return 1
+    group_dc="${dc,,}";group_admin="$admin"
+}
+group_rpc_ready() {
+    group_require_tool net samba-common-bin || return 1
+    [ -n "$group_dc" ] && [ -n "$group_admin" ] && return 0
+    group_rpc_configure
+}
+group_rpc_run() {
+    local rc
+    local -a cmd=(net rpc "$@" -S "$group_dc" -U "$group_admin" '--client-protection=encrypt')
+    printf '\nDOMAIN command:\n';print_command "${cmd[@]}"
+    {
+        printf '\n[%s] Remote domain command (native output/password prompts not captured):\n' "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+        print_command "${cmd[@]}"
+    } >> "$work_dir/actions.txt" || { echo 'Cannot record command; not run.'; return 1; }
+    env -u PASSWD -u PASSWD_FD -u PASSWD_FILE "${cmd[@]}"
+    rc=$?
+    if ! printf 'Command exit status: %s\n' "$rc" | tee -a "$work_dir/actions.txt"; then
+        echo 'Status recording failed; command MAY have completed. Inspect membership before repeating.';return 1
+    fi
+    if [ "$rc" != 0 ]; then echo 'Domain command failed. No local fallback or later write was run.'; fi
+    return "$rc"
+}
+group_rpc_read() {
+    local kind="$1" name
+    group_rpc_ready || return 1
+    case "$kind" in
+        info) group_rpc_run info ;;
+        groups) group_rpc_run group ;;
+        users) group_rpc_run user ;;
+        members|usergroups)
+            read -r -p 'Exact directory group/user name (sAMAccountName; empty cancels): ' name || return 1
+            group_valid_text "$name" || { echo 'Invalid/empty name.';return 1; }
+            if [ "$kind" = members ]; then group_rpc_run group members "$name"
+            else group_rpc_run user info "$name";fi ;;
+        *) return 1 ;;
+    esac
+}
+group_rpc_change() {
+    local mode="$1" group account subcommand
+    case "$mode" in add) subcommand=addmem ;; remove) subcommand=delmem ;; *) return 1 ;; esac
+    group_rpc_ready || return 1
+    echo 'DOMAIN scope: this changes membership on the DC, not /etc/group.'
+    echo 'Type exact directory account/group names. Spaces in group names are supported.'
+    read -r -p 'AD group: ' group || return 1
+    read -r -p 'AD user (e.g. jcore92): ' account || return 1
+    group_valid_text "$group" && group_valid_text "$account" || { echo 'Invalid/empty name; batches/password suffixes are not accepted.';return 1; }
+    echo 'Read the selected server/domain and current group/user information before approving:'
+    group_rpc_run info || return 1
+    group_rpc_run group members "$group" || return 1
+    group_rpc_run user info "$account" || return 1
+    printf '\nScope: DOMAIN\nDC: %s\nAction: %s\nGroup: %s\nUser: %s\n' "$group_dc" "$mode" "$group" "$account"
+    print_command net rpc group "$subcommand" "$group" "$account" -S "$group_dc" -U "$group_admin" '--client-protection=encrypt'
+    echo 'This can change access across domain machines, including administrative access.'
+    echo 'Removal does not cancel existing sessions/tickets. No inverse rollback is automatic.'
+    confirm_local 'Run exactly this DOMAIN membership command?' || return 1
+    group_rpc_run group "$subcommand" "$group" "$account" || return 1
+    echo 'Write returned success. Read back direct members from the same server:'
+    if ! group_rpc_run group members "$group"; then
+        echo 'Write succeeded but read-back failed. Inspect the directory before repeating the write.';return 1
+    fi
+    echo 'Inspect the result. Nested/primary memberships, client caches and existing sessions are separate.'
+}
+group_local_list() {
+    group_require_tool getent libc-bin || return 1
+    echo 'LOCAL /etc/group source only:'
+    getent -s files group
+}
+group_local_read() {
+    local group
+    group_require_tool getent libc-bin || return 1
+    read -r -p 'Existing LOCAL group name (empty cancels): ' group || return 1
+    group_valid_text "$group" || return 1
+    getent -s files group "$group" || { echo 'No local group by that name. A domain group is not a local group.';return 1; }
+    echo 'The final field is the explicit supplementary member list, not primary-group membership.'
+}
+group_local_change() {
+    local mode="$1" group requested account record group_record old_group_record fresh_record flag
+    local uid gid home shell ignored group_name group_gid members
+    case "$mode" in add) flag=-a ;; remove) flag=-d ;; *) return 1 ;; esac
+    group_require_tool getent libc-bin && group_require_tool gpasswd passwd || return 1
+    echo 'LOCAL scope: edits only this computer supplementary group membership.'
+    echo 'The user may be local or domain-backed, but must resolve through this computer NSS.'
+    read -r -p 'Existing LOCAL group: ' group || return 1
+    read -r -p 'User (prefer user@domain for a domain account): ' requested || return 1
+    group_valid_text "$group" && group_valid_text "$requested" || { echo 'Invalid/empty group or user.';return 1; }
+    group_record="$(getent -s files group "$group")" || { echo 'Group is not in the LOCAL files source; no domain group was modified.';return 1; }
+    [[ "$group_record" != *$'\n'* ]] || { echo 'Ambiguous local group lookup.';return 1; }
+    IFS=: read -r group_name ignored group_gid members <<< "$group_record"
+    [ "$group_name" = "$group" ] && [[ "$group_gid" =~ ^[0-9]+$ ]] || { echo 'Invalid local group record.';return 1; }
+    record="$(getent passwd "$requested")" || { echo 'User does not resolve through NSS. No account is created.';return 1; }
+    [[ "$record" != *$'\n'* ]] || { echo 'Ambiguous user lookup.';return 1; }
+    IFS=: read -r account ignored uid gid ignored home shell <<< "$record"
+    group_valid_text "$account" && [[ "$uid" =~ ^[0-9]+$ && "$gid" =~ ^[0-9]+$ ]] || { echo 'Invalid canonical user record.';return 1; }
+    if [ "$gid" = "$group_gid" ]; then
+        if [ "$mode" = add ];then echo 'This is already the user primary group. No supplementary edit needed.';return 0;fi
+        echo 'This is the user primary group. Removing a supplementary entry would not remove that membership; no edit attempted.';return 1
+    fi
+    printf '\nScope: LOCAL computer only\nAction: %s\nGroup: %s (GID %s)\nUser: %s (UID %s)\n' "$mode" "$group" "$group_gid" "$account" "$uid"
+    printf 'Current local group record: %s\n' "$group_record"
+    print_command gpasswd "$flag" "$account" -- "$group"
+    echo 'Groups such as sudo, wheel, docker or disk can grant extensive privileges.'
+    echo 'No AD membership changes; no automatic logout/restart. Existing sessions may retain old groups.'
+    confirm_local 'Run exactly this LOCAL supplementary membership command?' || return 1
+    fresh_record="$(getent passwd "$account")" && old_group_record="$(getent -s files group "$group")" || { echo 'Identity/group lookup changed or failed; cancelled.';return 1; }
+    [ "$fresh_record" = "$record" ] && [ "$old_group_record" = "$group_record" ] || { echo 'Identity/group changed since preview. Retry and review; no write run.';return 1; }
+    run_interactive gpasswd "$flag" "$account" -- "$group" || return 1
+    echo 'Native local command succeeded. Local group record now:'
+    getent -s files group "$group" || { echo 'Read-back failed after the write; inspect /etc/group before repeating.';return 1; }
+    echo 'Check a fresh user session; this is not proof of domain or effective-access revocation.'
+}
+group_manual_builder() {
+    local choice
+    cursor_menu 'Manually type names for which action?' choice \
+        'DOMAIN: add user to AD group' 'DOMAIN: remove user from AD group' \
+        'LOCAL: add user to local group' 'LOCAL: remove user from local group' 'Cancel' || return 1
+    case "$choice" in
+        'DOMAIN: add user to AD group') group_rpc_change add ;;
+        'DOMAIN: remove user from AD group') group_rpc_change remove ;;
+        'LOCAL: add user to local group') group_local_change add ;;
+        'LOCAL: remove user from local group') group_local_change remove ;;
+        *) return 0 ;;
+    esac
+}
+group_management_menu() {
+    local action group_dc='' group_admin=''
+    while :; do
+        printf '\nGroup management | domain target: %s | admin: %s\n' "${group_dc:-(not configured)}" "${group_admin:-(not configured)}"
+        cursor_menu 'Group membership management:' action \
+            'Configure domain DC / administrator' 'DOMAIN: server/domain information' \
+            'DOMAIN: list groups' 'DOMAIN: list users' 'DOMAIN: list group members' 'DOMAIN: list user groups' \
+            'DOMAIN: add user to AD group' 'DOMAIN: remove user from AD group' \
+            'LOCAL: list groups' 'LOCAL: view group members' \
+            'LOCAL: add user to local group' 'LOCAL: remove user from local group' \
+            'Manual names / command builder' 'Important notes' 'Back' || return
+        case "$action" in
+            'Configure domain DC / administrator') group_rpc_configure;pause_screen ;;
+            'DOMAIN: server/domain information') group_rpc_read info;pause_screen ;;
+            'DOMAIN: list groups') group_rpc_read groups;pause_screen ;;
+            'DOMAIN: list users') group_rpc_read users;pause_screen ;;
+            'DOMAIN: list group members') group_rpc_read members;pause_screen ;;
+            'DOMAIN: list user groups') group_rpc_read usergroups;pause_screen ;;
+            'DOMAIN: add user to AD group') group_rpc_change add;pause_screen ;;
+            'DOMAIN: remove user from AD group') group_rpc_change remove;pause_screen ;;
+            'LOCAL: list groups') group_local_list;pause_screen ;;
+            'LOCAL: view group members') group_local_read;pause_screen ;;
+            'LOCAL: add user to local group') group_local_change add;pause_screen ;;
+            'LOCAL: remove user from local group') group_local_change remove;pause_screen ;;
+            'Manual names / command builder') group_manual_builder;pause_screen ;;
+            'Important notes')
+                cat <<'JSF_GROUP_NOTES'
+Two distinct scopes; never interchangeable:
+  DOMAIN: net rpc group addmem/delmem GROUP USER -S DC -U ADMIN
+  LOCAL:  gpasswd -a/-d NSS_USER -- LOCAL_GROUP
+The first changes AD membership; the second changes this machine /etc/group.
+Local actions work without net or samba-tool. Missing commands are checked per
+action, with an optional install of only the corresponding native APT package.
+There is no automatic domain-to-local fallback, including after authentication
+errors. No Samba DC/server package installation, provisioning or Winbind setup.
+
+DOMAIN: choose an actual DC FQDN and delegated administrator account. Native
+Samba prompts for a password, possibly once per read/write command. Passwords
+are not wrapper read inputs or arguments. PASSWD/PASSWD_FD/PASSWD_FILE are unset.
+Kerberos/NTLM selection follows native policy; the wrapper does not force an
+NTLM fallback or disable an existing Kerberos requirement. SMB encryption is
+requested explicitly via --client-protection=encrypt; unsupported clients or
+servers return a native error rather than silently removing protection.
+The original samba-tool-specific requirement is removed entirely.
+Inspect server/domain information and account/group output before confirming.
+AD privileges still must be delegated; local sudo is not domain authority.
+RPC user info reports groups, not a complete account-attribute/audit view.
+
+LOCAL: group must exist in the files source; the resolved canonical NSS username
+is used, including user@domain. gpasswd changes supplementary membership without
+replacing all other groups. No usermod -G, primary-group changes, new local
+accounts, manual /etc/group rewriting or domain-account editing. Provider/tool
+limitations are surfaced as native errors. Inputs are rechecked before the write.
+
+Typed names are separate quoted arguments, never eval or a raw root command.
+One group/user per operation. Read-back is displayed, not an automated assertion
+of all effective access. Domain nesting/primary groups and cached identities can
+make effective access differ from the displayed direct member list. New sessions
+may be needed. Removing membership is not a ticket/session/offline-password purge.
+Other admin changes can race with a command; there is no transactional rollback.
+No account/group deletion, password reset, broad cache wipe or implicit retry.
+Native domain output/password prompts are not captured. The existing action
+report records command targets and status, which can include sensitive names.
+JSF_GROUP_NOTES
+                pause_screen ;;
+            *) return ;;
+        esac
+    done
+}
+
+reports_menu() {
+    local action
+    while :; do
+        cursor_menu 'Reports and notes:' action 'View last discovery output' 'View last sudo change preview / result' 'View last graphical admin change' 'View last short-name change' 'View last XRDP domain-login change' 'View last XRDP account check' 'View last cleanup result' 'Export reports' 'Important notes' 'Back' || return
+        case "$action" in
+            'View last discovery output') view_file "$work_dir/discovery.txt" ;;
+            'View last sudo change preview / result') view_file "$work_dir/domain-sudo.txt" ;;
+            'View last graphical admin change') view_file "$work_dir/graphical-admins.txt" ;;
+            'View last short-name change') view_file "$work_dir/shortnames.txt" ;;
+'View last XRDP domain-login change') view_file "$work_dir/xrdp-domain-login.txt" ;;
+'View last XRDP account check') view_file "$work_dir/xrdp-login-check.txt" ;;
+            'View last cleanup result') view_file "$work_dir/cleanup-last.txt" ;;
+            'Export reports') export_reports ;;
+            'Important notes') show_notes ;;
+            *) return ;;
+        esac
+    done
+}
+while :; do
+    printf '\033[H\033[2JJS-Forge: Active Directory Manager\n\n'
+    printf 'APT | realmd + SSSD + adcli | system-wide domain integration\n'
+    printf 'Opening this menu does not change authentication or enroll the computer.\n\n'
+    cursor_menu 'Select an action:' selected 'Status and login readiness' 'Enrollment and setup' 'Domain access' 'Group membership management' 'Maintenance and troubleshooting' 'Reports and notes' 'Exit' || break
+    case "$selected" in
+        'Status and login readiness') status_menu ;;
+        'Enrollment and setup') enrollment_menu ;;
+        'Domain access') access_menu ;;
+        'Group membership management') group_management_menu ;;
+        'Maintenance and troubleshooting') maintenance_menu ;;
+        'Reports and notes') reports_menu ;;
+        *) break ;;
+    esac
+done
+exit 0

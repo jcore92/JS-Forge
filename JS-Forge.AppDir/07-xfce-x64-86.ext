@@ -1,0 +1,71 @@
+#!/bin/bash
+
+jsf_tested_platform_warning() {
+    local detected_desktop detected_arch desktop_is_xfce=0 arch_is_tested=0
+    local warning_text
+
+    detected_desktop="${XDG_CURRENT_DESKTOP:-${XDG_SESSION_DESKTOP:-${DESKTOP_SESSION:-unknown}}}"
+    detected_arch="$(uname -m 2>/dev/null)"
+    detected_arch="${detected_arch:-unknown}"
+
+    # Desktop identifiers may contain multiple colon-separated names.
+    case ":${detected_desktop,,}:" in
+        *:xfce:*|*:xfce4:*|*:xfce4-session:*|*":xfce session:"*)
+            desktop_is_xfce=1
+            ;;
+    esac
+
+    case "${detected_arch,,}" in
+        x86_64|amd64)
+            arch_is_tested=1
+            ;;
+    esac
+
+    if (( desktop_is_xfce == 0 || arch_is_tested == 0 )); then
+        text_delay
+
+        warning_text="
+COMPATIBILITY NOTICE
+***
+
+Detected desktop:      $detected_desktop
+Detected architecture: $detected_arch
+
+Extensive testing of ${app_name:-this application} has been performed
+only on XFCE with the x86_64 (64-bit Intel/AMD) architecture.
+
+Other desktop environments and architectures may work, but have
+not been extensively tested. Functionality, appearance, and
+integration may differ.
+
+This notice does not prevent you from continuing.
+
+***
+"
+
+        if [ "${gui_flag:-0}" = "1" ] &&
+            command -v zenity >/dev/null 2>&1; then
+
+            # Intentional word splitting: the runtime stores dimensions
+            # as an option string, e.g. "--width=800 --height=500".
+            printf '%s\n' "$warning_text" |
+                zenity --text-info \
+                    ${default_mainmenu_gui_dimensions:-} \
+                    --title="${app_name:-JS-Forge}: Compatibility Notice" \
+                    --cancel-label="" \
+                    --timeout=10 || :
+
+        else
+            printf '%s\n' "$warning_text" | print_red
+            sleep 5
+        fi
+    else
+        printf '\nTested platform detected: XFCE / %s\n\n' "$detected_arch"
+        sleep 1
+    fi
+
+    # An informational extension must not report startup failure.
+    return 0
+}
+
+jsf_tested_platform_warning
